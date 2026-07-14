@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "家庭單字卡 | Family Anki Cards",
   description: "家庭英文單字學習系統 — 哥哥、弟弟、媽媽、爸爸一起學英文",
-  manifest: "/Anki-card/manifest.json",
+  manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
