@@ -5,7 +5,7 @@
 // Good  → 排到最後
 // Easy  → 今天不再出現，明天恢復
 // ============================================================
-import { ReviewAnswer } from "./types";
+type ReviewAnswer = "again" | "hard" | "good" | "easy";
 
 export function insertAt(arr: string[], item: string, pos: number): string[] {
   const copy = [...arr];

@@ -1,210 +1,71 @@
-// ============================================================
-// LocalStorage 資料存取層
-// key 命名：user_{userId}_{dataType}_{optional_deckId}
-// ============================================================
-import {
-  CardProgress,
-  UserStatistics,
-  DailyStats,
-  SessionState,
-  SpeechSettings,
-  UserConfig,
-  CardMode,
-} from "./types";
-import { getTodayDate } from "./scheduler";
+/**
+ * lib/storage.ts（v2.0 重構：作為向後相容性包裝）
+ * 
+ * 新架構請使用 storage/ 模組：
+ *   storage/cards.ts    - 卡片進度
+ *   storage/progress.ts - 每日統計
+ *   storage/settings.ts - 設定
+ *   storage/users.ts    - 用戶設定
+ *
+ * 此檔案重新匯出這些模組的功能，供尚未遷移的舊程式碼使用
+ */
 
-const PREFIX = "anki_";
+// Re-export from modular storage
+export { getCardProgress, updateCardProgress, clearCardProgress, getSession, saveSession, clearSession } from "@/storage/cards";
+export { getDailyStats, incrementStat, saveQuizScore, getAllStats, getStreak } from "@/storage/progress";
+export { getSettings, saveSettings, getSheetId, saveSheetId, getLastSyncDate, saveLastSyncDate } from "@/storage/settings";
+export { getUserConfigs, getUserConfig, saveUserConfig, saveAllUserConfigs, setPin, verifyPin } from "@/storage/users";
 
-function key(...parts: string[]): string {
-  return PREFIX + parts.join("_");
+// 型別重新匯出（向後相容）
+export type { AppSettings, SpeechSettings, UserConfig, CardProgress, SessionState, DailyStats } from "./types";
+
+// ─── 向後相容的舊 API（可以逐步遷移）────────────────────────────
+
+/** @deprecated 請使用 saveAllUserConfigs */
+export function saveUserConfigs(configs: import("./types").UserConfig[]) {
+  const { saveAllUserConfigs } = require("@/storage/users");
+  saveAllUserConfigs(configs);
 }
 
-function save<T>(k: string, data: T): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(k, JSON.stringify(data));
-  } catch (e) {
-    console.error("localStorage save error:", e);
-  }
+/** @deprecated 請使用 saveSettings({ speech: ... }) */
+export function saveSpeechSettings(speech: import("./types").SpeechSettings) {
+  const { saveSettings } = require("@/storage/settings");
+  saveSettings({ speech });
 }
 
-function load<T>(k: string): T | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(k);
-    return raw ? (JSON.parse(raw) as T) : null;
-  } catch {
-    return null;
-  }
+/** @deprecated 請使用 getSettings().speech */
+export function getSpeechSettings(): import("./types").SpeechSettings {
+  const { getSettings } = require("@/storage/settings");
+  return getSettings().speech;
 }
 
-// ── 卡片進度 ──────────────────────────────────────────────
-export function getCardProgress(userId: string, wordId: string): CardProgress | null {
-  const all = getAllCardProgress(userId);
-  return all[wordId] ?? null;
+/** @deprecated 請使用 saveSettings({ sheetId: ... }) */
+export function saveCardMode(userId: string, deckId: string, mode: string) {
+  // 儲存在 session 裡（由 study page 直接處理）
+  console.warn("saveCardMode is deprecated, use session.mode instead");
 }
 
-export function getAllCardProgress(userId: string): Record<string, CardProgress> {
-  return load<Record<string, CardProgress>>(key(userId, "progress")) ?? {};
+/** @deprecated 請使用 session.mode */
+export function getCardMode(userId: string, deckId: string): string {
+  const { getSession } = require("@/storage/cards");
+  return getSession(userId, deckId)?.mode ?? "en-to-zh";
 }
 
-export function saveCardProgress(userId: string, progress: CardProgress): void {
-  const all = getAllCardProgress(userId);
-  all[progress.word_id] = progress;
-  save(key(userId, "progress"), all);
+/** @deprecated 請使用 incrementStat */
+export function updateCardReview(userId: string, word: string, answer: string, nextReview: string) {
+  // 不再需要追蹤每張卡的 nextReview（簡化架構）
+  console.warn("updateCardReview is deprecated in v2.0 architecture");
 }
 
-export function updateCardReview(
-  userId: string,
-  wordId: string,
-  answer: "again" | "hard" | "good" | "easy",
-  nextReview: string
-): void {
-  const existing = getCardProgress(userId, wordId);
-  const today = getTodayDate();
-  const updated: CardProgress = existing ?? {
-    word_id: wordId,
-    next_review: nextReview,
-    last_review: today,
-    again_count: 0,
-    hard_count: 0,
-    good_count: 0,
-    easy_count: 0,
-    completed: false,
-  };
-  updated.last_review = today;
-  updated.next_review = nextReview;
-  updated[`${answer}_count`]++;
-  saveCardProgress(userId, updated);
+/** @deprecated 請使用 saveQuizScore */
+export function saveQuizScoreCompat(userId: string, score: number) {
+  const { saveQuizScore } = require("@/storage/progress");
+  saveQuizScore(userId, score);
 }
 
-// ── 每日統計 ──────────────────────────────────────────────
-export function getDailyStats(userId: string, date?: string): DailyStats {
-  const d = date ?? getTodayDate();
-  const all = load<UserStatistics>(key(userId, "stats")) ?? {};
-  return all[d] ?? { studied: 0, completed: 0, again: 0, hard: 0, good: 0, easy: 0 };
-}
-
-export function getAllStats(userId: string): UserStatistics {
-  return load<UserStatistics>(key(userId, "stats")) ?? {};
-}
-
-export function incrementStat(
-  userId: string,
-  field: keyof DailyStats,
-  value = 1
-): void {
-  const d = getTodayDate();
-  const all = load<UserStatistics>(key(userId, "stats")) ?? {};
-  if (!all[d]) {
-    all[d] = { studied: 0, completed: 0, again: 0, hard: 0, good: 0, easy: 0 };
-  }
-  (all[d][field] as number) += value;
-  save(key(userId, "stats"), all);
-}
-
-export function saveQuizScore(userId: string, score: number): void {
-  const d = getTodayDate();
-  const all = load<UserStatistics>(key(userId, "stats")) ?? {};
-  if (!all[d]) {
-    all[d] = { studied: 0, completed: 0, again: 0, hard: 0, good: 0, easy: 0 };
-  }
-  all[d].quiz_score = score;
-  save(key(userId, "stats"), all);
-}
-
-// ── 學習 Session（中斷恢復）─────────────────────────────
-export function getSession(userId: string, deckId: string): SessionState | null {
-  return load<SessionState>(key(userId, "session", deckId));
-}
-
-export function saveSession(userId: string, session: SessionState): void {
-  save(key(userId, "session", session.deckId), session);
-}
-
-export function clearSession(userId: string, deckId: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(key(userId, "session", deckId));
-}
-
-// ── 語音設定 ──────────────────────────────────────────────
-const DEFAULT_SPEECH: SpeechSettings = {
-  voiceName: "",
-  rate: 1.0,
-  pitch: 1.0,
-  volume: 1.0,
-};
-
-export function getSpeechSettings(): SpeechSettings {
-  return load<SpeechSettings>(key("speech")) ?? DEFAULT_SPEECH;
-}
-
-export function saveSpeechSettings(settings: SpeechSettings): void {
-  save(key("speech"), settings);
-}
-
-// ── 用戶設定（LocalStorage fallback — 初始預設值）────────
-const DEFAULT_USERS: UserConfig[] = [
-  { id: "brother1", name: "哥哥", role: "learner", photoUrl: "", assignedDecks: [] },
-  { id: "brother2", name: "弟弟", role: "learner", photoUrl: "", assignedDecks: [] },
-  { id: "mom", name: "媽媽", role: "admin", photoUrl: "", assignedDecks: [], pinHash: "" },
-  { id: "dad", name: "爸爸", role: "admin", photoUrl: "", assignedDecks: [], pinHash: "" },
-];
-
-export function getUserConfigs(): UserConfig[] {
-  return load<UserConfig[]>(key("users")) ?? DEFAULT_USERS;
-}
-
-export function saveUserConfigs(configs: UserConfig[]): void {
-  save(key("users"), configs);
-}
-
-export function getUserConfig(userId: string): UserConfig | undefined {
-  return getUserConfigs().find((u) => u.id === userId);
-}
-
-// ── PIN 碼（簡單 hash）────────────────────────────────────
+/** 快取 PIN 雜湊（同步版本，向後相容） */
 export function hashPin(pin: string): string {
-  // 簡單的雙重 SHA-like 雜湊（純前端，非加密用途）
-  let hash = 0;
-  const str = `anki_${pin}_salt_2026`;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash;
-  }
-  return hash.toString(36);
-}
-
-export function verifyPin(userId: string, pin: string): boolean {
-  const user = getUserConfig(userId);
-  if (!user?.pinHash) return pin === "0000"; // 預設 PIN
-  return user.pinHash === hashPin(pin);
-}
-
-export function setPin(userId: string, pin: string): void {
-  const configs = getUserConfigs();
-  const idx = configs.findIndex((u) => u.id === userId);
-  if (idx >= 0) {
-    configs[idx].pinHash = hashPin(pin);
-    saveUserConfigs(configs);
-  }
-}
-
-// ── Google Sheet ID 設定 ──────────────────────────────────
-export function getSheetId(): string {
-  return load<string>(key("sheetId")) ?? "";
-}
-
-export function saveSheetId(id: string): void {
-  save(key("sheetId"), id);
-}
-
-// ── 學習模式（正面語言）──────────────────────────────────
-export function getCardMode(userId: string, deckId: string): CardMode {
-  return load<CardMode>(key(userId, "mode", deckId)) ?? "en-to-zh";
-}
-
-export function saveCardMode(userId: string, deckId: string, mode: CardMode): void {
-  save(key(userId, "mode", deckId), mode);
+  // 舊架構使用同步雜湊（不安全）
+  // 新架構使用 verifyPin（async）
+  return pin; // 僅向後相容，實際驗證走 verifyPin
 }

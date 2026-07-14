@@ -1,90 +1,111 @@
-// ============================================================
-// 全域 TypeScript 型別定義
-// ============================================================
+/**
+ * types/index.ts（同時作為 lib/types.ts 的主型別檔案）
+ * 所有跨模組共用的 TypeScript 型別
+ */
 
-export type UserId = "brother1" | "brother2" | "mom" | "dad";
-export type UserRole = "admin" | "learner";
-export type ReviewAnswer = "again" | "hard" | "good" | "easy";
-export type CardMode = "en-to-zh" | "zh-to-en";
-export type QuizType = "context-fill" | "en-to-zh" | "zh-to-en";
+// ── 單字卡 ──────────────────────────────────────────
 
-// ── 單字卡片 ──────────────────────────────────────────────
+/** 單一單字卡資料結構（對應 Google Sheets Vocabulary 工作表） */
 export interface Card {
-  word: string;          // 英文單字（作為唯一 ID）
+  word: string;          // 英文單字（主鍵）
   meaning: string;       // 中文翻譯
-  partOfSpeech: string;  // 詞性
+  partOfSpeech: string;  // 詞性（n., vt., adj., ...）
   example: string;       // 英文例句
-  exampleChinese: string;// 例句中文翻譯
-  synonyms: string;      // 同義字（逗號分隔）
-  root: string;          // 字根分析
-  level: string;         // 難度（A1/A2/B1/B2/C1）
-  deck: string;          // 所屬牌組
+  exampleChinese: string; // 中文例句
+  synonyms: string;      // 同義字
+  root: string;          // 字根字源
+  level: string;         // 難度（A1~C2 或 B1/B2）
+  deck: string;          // 所屬牌組名稱
 }
 
-// ── 用戶設定 ──────────────────────────────────────────────
+/** 指派記錄（對應 Google Sheets Assignments 工作表） */
+export interface Assignment {
+  user: string;    // 用戶名稱（哥哥/弟弟/媽媽/爸爸）
+  deck: string;    // 牌組名稱
+  enabled: boolean; // 是否啟用
+  order: number;   // 排序
+}
+
+// ── 用戶 ────────────────────────────────────────────
+
+export type UserRole = "admin" | "learner";
+export type CardMode = "en-to-zh" | "zh-to-en";
+export type ThemeMode = "light" | "dark" | "system";
+
 export interface UserConfig {
-  id: UserId;
-  name: string;          // 哥哥 / 弟弟 / 媽媽 / 爸爸
+  id: string;
+  name: string;
+  photoUrl: string;
   role: UserRole;
-  photoUrl: string;      // Google Drive 公開連結 或 /avatars/xxx.jpg
   assignedDecks: string[];
-  pinHash?: string;      // 父母後台 PIN（僅 admin）
 }
 
-// ── 卡片學習進度 ──────────────────────────────────────────
+// ── SRS 進度 ─────────────────────────────────────────
+
+/** 每張卡片的 SRS 學習進度 */
 export interface CardProgress {
-  word_id: string;
-  next_review: string;   // "2026-07-15"（隔天 Easy 卡恢復）
-  last_review: string;   // "2026-07-14"
-  again_count: number;
-  hard_count: number;
-  good_count: number;
-  easy_count: number;
-  completed: boolean;
+  word: string;
+  interval: number;     // 複習間隔（天）
+  easeFactor: number;   // 熟悉度係數
+  reviews: number;      // 總複習次數
+  nextReview: string;   // 下次複習日期（ISO date string, e.g. "2024-01-15"）
+  lastAnswer?: "again" | "hard" | "good" | "easy";
 }
 
-// ── 每日統計 ──────────────────────────────────────────────
-export interface DailyStats {
-  studied: number;
-  completed: number;
-  again: number;
-  hard: number;
-  good: number;
-  easy: number;
-  quiz_score?: number;   // 測驗成績（0-100）
-}
-
-export type UserStatistics = {
-  [date: string]: DailyStats; // key: "2026-07-14"
-};
-
-// ── 學習 Session（中斷恢復用）────────────────────────────
+/** 今日學習 session 狀態（用於中斷後繼續） */
 export interface SessionState {
-  date: string;          // "2026-07-14"
+  date: string;          // 今日日期（ISO）
   deckId: string;
-  queue: string[];       // word_id 排列順序（含 Again/Hard 插入位置）
-  currentIndex: number;  // 中斷點（關閉前讀到哪張）
-  todayEasy: string[];   // 今日 Easy 卡片（不再出現）
-  mode: CardMode;        // 當前學習方向
+  queue: string[];       // 今日待學習的 word 列表（有序）
+  currentIndex: number;  // 目前學到第幾張
+  todayEasy: string[];   // 今日標記為 Easy 的 words
+  mode: CardMode;        // 正面顯示語言
 }
 
-// ── 語音設定 ──────────────────────────────────────────────
+/** 每日統計 */
+export interface DailyStats {
+  studied: number;    // 今日看過幾張
+  completed: number;  // 完整完成幾輪
+  again: number;      // Again 按了幾次
+  hard: number;       // Hard 按了幾次
+  good: number;       // Good 按了幾次
+  easy: number;       // Easy 按了幾次
+  quiz_score?: number; // 當日測驗分數（Sprint 5）
+}
+
+// ── 設定 ────────────────────────────────────────────
+
+/** 語音設定 */
 export interface SpeechSettings {
   voiceName: string;
-  rate: number;          // 0.5 - 2.0
-  pitch: number;         // 0.5 - 2.0
-  volume: number;        // 0.0 - 1.0
+  rate: number;
+  pitch: number;
+  volume: number;
 }
 
-// ── 測驗題目 ──────────────────────────────────────────────
+/** 全域 App 設定 */
+export interface AppSettings {
+  sheetId: string;
+  theme: ThemeMode;
+  speech: SpeechSettings;
+  cardMode: CardMode;
+  autoPlaySpeech: boolean;  // 翻面時自動播放例句
+  gesture: boolean;         // 手勢翻卡（Sprint 3）
+  lastSyncDate: string;     // 最後一次同步時間
+}
+
+// ── 測驗（Sprint 5）────────────────────────────────
+
+export type QuizType = "context-fill" | "en-to-zh" | "zh-to-en";
+
 export interface QuizQuestion {
   type: QuizType;
   wordId: string;
-  sentence?: string;          // 含空格的英文句子（context-fill 用）
-  sentenceChinese?: string;   // 句子中文翻譯
-  prompt: string;             // 題目提示文字
-  answer: string;             // 正確答案
-  options: string[];          // 四個選項（已 shuffle）
+  prompt: string;
+  sentence?: string;
+  sentenceChinese?: string;
+  options: string[];
+  answer: string;
 }
 
 export interface QuizResult {
@@ -92,13 +113,4 @@ export interface QuizResult {
   wordId: string;
   userAnswer: string;
   correct: boolean;
-  timeTaken?: number;
-}
-
-// ── Assignments（Google Sheets 格式）─────────────────────
-export interface Assignment {
-  user: string;
-  deck: string;
-  enabled: boolean;
-  order: number;
 }

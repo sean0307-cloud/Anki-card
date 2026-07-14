@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { DailyStats } from "@/lib/types";
-import { getAllStats, getDailyStats, getUserConfig } from "@/lib/storage";
+import { getAllStats, getDailyStats, getStreak } from "@/storage/progress";
+import { getUserConfig } from "@/storage/users";
+import type { DailyStats } from "@/lib/types";
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
@@ -36,20 +37,9 @@ export default function StatsPage() {
 
   const weekDates = getWeekDates();
   const maxStudied = Math.max(...weekDates.map((d) => stats[d]?.studied ?? 0), 1);
-
   const allDates = Object.keys(stats).sort().reverse();
   const totalStudied = allDates.reduce((s, d) => s + (stats[d]?.studied ?? 0), 0);
-  const streak = (() => {
-    let s = 0;
-    const today = new Date();
-    for (let i = 0; i < allDates.length; i++) {
-      const d = new Date(allDates[i]);
-      const diff = Math.floor((today.getTime() - d.getTime()) / 86400000);
-      if (diff === i || diff === i + 1) { if ((stats[allDates[i]]?.studied ?? 0) > 0) s++; else break; }
-      else break;
-    }
-    return s;
-  })();
+  const streak = getStreak(userId);
 
   return (
     <div className="page">
@@ -59,9 +49,8 @@ export default function StatsPage() {
           <div style={{ fontWeight: 700 }}>{user?.name ?? ""} 的學習統計</div>
         </div>
       </div>
-
       <div className="page-content">
-        {/* 總覽卡片 */}
+        {/* 總覽 */}
         <div className="card animate-fade-in" style={{ marginBottom: "20px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", textAlign: "center" }}>
             <div>
@@ -78,36 +67,25 @@ export default function StatsPage() {
             </div>
           </div>
         </div>
-
-        {/* 本週學習圖 */}
+        {/* 週視圖 */}
         <div className="card animate-slide-up" style={{ marginBottom: "20px" }}>
           <div style={{ fontWeight: 700, marginBottom: "16px", fontSize: "0.9375rem" }}>📈 本週學習</div>
           <div style={{ display: "flex", alignItems: "flex-end", gap: "6px", height: "80px" }}>
             {weekDates.map((d) => {
               const s = stats[d]?.studied ?? 0;
-              const h = maxStudied > 0 ? Math.max((s / maxStudied) * 72, s > 0 ? 8 : 2) : 2;
+              const h = Math.max((s / maxStudied) * 72, s > 0 ? 8 : 2);
               const isToday = d === new Date().toISOString().split("T")[0];
               return (
                 <div key={d} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
-                  <div style={{
-                    width: "100%",
-                    height: `${h}px`,
-                    background: isToday ? "var(--blue)" : s > 0 ? "var(--blue-light)" : "var(--surface-3)",
-                    borderRadius: "4px 4px 0 0",
-                    transition: "height 0.5s ease",
-                    border: isToday ? "none" : s > 0 ? "1px solid var(--blue)" : "none",
-                  }} />
-                  <div className="text-xs text-muted" style={{ fontSize: "0.65rem", fontWeight: isToday ? 700 : 400, color: isToday ? "var(--blue)" : undefined }}>
-                    {formatDate(d)}
-                  </div>
+                  <div style={{ width: "100%", height: `${h}px`, background: isToday ? "var(--blue)" : s > 0 ? "var(--blue-light)" : "var(--surface-3)", borderRadius: "4px 4px 0 0", border: !isToday && s > 0 ? "1px solid var(--blue)" : "none", transition: "height 0.5s ease" }} />
+                  <div className="text-xs text-muted" style={{ fontSize: "0.65rem", fontWeight: isToday ? 700 : 400, color: isToday ? "var(--blue)" : undefined }}>{formatDate(d)}</div>
                   {s > 0 && <div style={{ fontSize: "0.6rem", color: "var(--text-muted)" }}>{s}</div>}
                 </div>
               );
             })}
           </div>
         </div>
-
-        {/* 今日統計 */}
+        {/* 今日詳情 */}
         <div className="card animate-slide-up" style={{ marginBottom: "20px" }}>
           <div style={{ fontWeight: 700, marginBottom: "12px", fontSize: "0.9375rem" }}>📊 今日詳情</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
@@ -125,31 +103,20 @@ export default function StatsPage() {
               </div>
             ))}
           </div>
-          {todayStats.quiz_score !== undefined && (
-            <div style={{ marginTop: "12px", textAlign: "center", padding: "12px", background: "var(--blue-light)", borderRadius: "var(--r-md)" }}>
-              <span style={{ color: "var(--blue)", fontWeight: 700 }}>📝 測驗成績 {todayStats.quiz_score} 分</span>
-            </div>
-          )}
         </div>
-
-        {/* 歷史記錄 */}
-        <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "12px" }}>
-          歷史記錄
-        </div>
-        {allDates.slice(0, 14).map((d) => {
-          const s = stats[d];
-          return (
-            <div key={d} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
-              <div>
-                <div style={{ fontWeight: 500 }}>{d}</div>
-                <div className="text-xs text-muted">學習 {s.studied} · 完成 {s.completed}</div>
-              </div>
-              {s.quiz_score !== undefined && (
-                <span className="badge badge-blue">{s.quiz_score}分</span>
-              )}
+        {/* 歷史 */}
+        <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "12px" }}>歷史記錄</div>
+        {allDates.slice(0, 14).map((d) => (
+          <div key={d} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
+            <div>
+              <div style={{ fontWeight: 500 }}>{d}</div>
+              <div className="text-xs text-muted">學習 {stats[d].studied} · 完成 {stats[d].completed}</div>
             </div>
-          );
-        })}
+            {stats[d].quiz_score !== undefined && (
+              <span className="badge badge-blue">{stats[d].quiz_score}分</span>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
