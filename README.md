@@ -1,0 +1,2 @@
+# Anki-card
+EN Words
