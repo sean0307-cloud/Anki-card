@@ -185,3 +185,54 @@ export function getCardStoreSnapshot() {
     cardCount: state.cards.length,
   };
 }
+
+/** 取得所有 assignments（含已停用的） */
+export function getAllAssignments(): Assignment[] {
+  return state.assignments;
+}
+
+/** 取得某個牌組的 assignment 清單 */
+export function getDeckAssignments(deckName: string): Assignment[] {
+  return state.assignments.filter((a) => a.deck === deckName);
+}
+
+/** 更新單一 assignment（本地修改，不寫回 Sheet） */
+export function updateLocalAssignment(updated: Assignment): void {
+  const idx = state.assignments.findIndex(
+    (a) => a.user === updated.user && a.deck === updated.deck
+  );
+  if (idx >= 0) {
+    state.assignments[idx] = updated;
+  } else {
+    state.assignments.push(updated);
+  }
+  // 更新 cache
+  if (typeof window !== "undefined") {
+    try {
+      const raw = localStorage.getItem("anki_card_cache");
+      if (raw) {
+        const cached = JSON.parse(raw);
+        cached.assignments = state.assignments;
+        localStorage.setItem("anki_card_cache", JSON.stringify(cached));
+      }
+    } catch { /* ignore */ }
+  }
+  notify();
+}
+
+/** 批次更新 assignments */
+export function updateAllLocalAssignments(assignments: Assignment[]): void {
+  state.assignments = assignments;
+  if (typeof window !== "undefined") {
+    try {
+      const raw = localStorage.getItem("anki_card_cache");
+      if (raw) {
+        const cached = JSON.parse(raw);
+        cached.assignments = state.assignments;
+        localStorage.setItem("anki_card_cache", JSON.stringify(cached));
+      }
+    } catch { /* ignore */ }
+  }
+  notify();
+}
+

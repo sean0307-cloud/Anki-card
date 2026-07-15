@@ -2,13 +2,13 @@
 import { useEffect, useState, useCallback, useRef, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import type { Card, CardMode, SessionState } from "@/lib/types";
-import { SRS, DAILY_NEW_CARD_LIMIT } from "@/lib/constants";
+import { DAILY_NEW_CARD_LIMIT } from "@/lib/constants";
 import { getDeckCards } from "@/lib/cardStore";
 import { useCards } from "@/hooks/useCards";
-import { getSession, saveSession, clearSession } from "@/storage/cards";
+import { getSession, saveSession, clearSession, updateCardProgress } from "@/storage/cards";
 import { incrementStat } from "@/storage/progress";
 import { getSettings } from "@/storage/settings";
-import { buildDailyQueue, getTodayDate, getTomorrowDate } from "@/lib/scheduler";
+import { processReview, buildDailyQueue, getTodayDate } from "@/lib/scheduler";
 import { speakWord, speakSentence, stopSpeech, onVoicesReady, getAvailableVoices } from "@/lib/speech";
 import { saveSettings } from "@/storage/settings";
 import type { SpeechSettings } from "@/lib/types";
@@ -20,6 +20,11 @@ const DEMO_CARDS: Card[] = [
   { word: "access", meaning: "進入；使用權", partOfSpeech: "n./vt.", example: "Students can access the library online.", exampleChinese: "學生可以在線上使用圖書館。", synonyms: "entry, approach", root: "ac-(to)+cedere(go)", level: "A2", deck: "demo" },
   { word: "accurate", meaning: "精確的；正確的", partOfSpeech: "adj.", example: "The weather forecast was accurate this time.", exampleChinese: "這次天氣預報很準確。", synonyms: "precise, exact", root: "ac-(to)+cura(care)", level: "B1", deck: "demo" },
 ];
+
+// ── Session 結構說明 ──────────────────────────────────
+// queue: 完整的「今日待學習」列表（含 again/hard 插回的）
+// currentIndex: 目前在學第幾張（0-based）
+// ─────────────────────────────────────────────────────
 
 function StudyInner() {
   const router = useRouter();
@@ -41,34 +46,51 @@ function StudyInner() {
   const rawCards = isLoaded ? getDeckCards(deckId) : [];
   const cards = rawCards.length > 0 ? rawCards : DEMO_CARDS;
 
+  // 建立 word → Card 的快查表
+  const cardMap = Object.fromEntries(cards.map((c) => [c.word, c]));
+
   // 目前卡片
-  const currentCard = session && cards.length > 0
-    ? cards.find((c) => c.word === session.queue[session.currentIndex]) ?? null
+  const currentCard = session
+    ? (cardMap[session.queue[session.currentIndex]] ?? null)
     : null;
 
+  // ── 進度計算（動態，因為 again/hard 會把卡片放回去）
+  // queue.length 是當前總張數（含重複），currentIndex 是已完成張數
   const totalInQueue = session?.queue.length ?? 0;
-  const progress = session?.currentIndex ?? 0;
-  const pct = totalInQueue > 0 ? Math.round((progress / totalInQueue) * 100) : 0;
+  const currentPos = (session?.currentIndex ?? 0) + 1; // 顯示用（1-based）
+  const pct = totalInQueue > 0 ? Math.round(((session?.currentIndex ?? 0) / totalInQueue) * 100) : 0;
 
-  // ── 建立 / 恢復 session
+  // ── 建立 / 恢復 session ───────────────────────────
   useEffect(() => {
-    if (!isLoaded && rawCards.length === 0) return; // 等待載入
+    if (!isLoaded && rawCards.length === 0) return;
 
     const today = getTodayDate();
     const saved = getSession(userId, deckId);
+
     let sess: SessionState;
 
-    if (saved && saved.date === today) {
+    if (saved && saved.date === today && saved.queue.length > 0 && saved.currentIndex < saved.queue.length) {
+      // ✅ 今天有未完成的 session → 繼續
       sess = saved;
     } else {
+      // 新 session（新的一天 or 第一次）
       const queue = buildDailyQueue(
         cards.map((c) => c.word),
         saved?.todayEasy ?? [],
         today
       );
-      sess = { date: today, deckId, queue: queue.slice(0, DAILY_NEW_CARD_LIMIT), currentIndex: 0, todayEasy: [], mode: "en-to-zh" };
+      const limitedQueue = queue.slice(0, DAILY_NEW_CARD_LIMIT);
+      sess = {
+        date: today,
+        deckId,
+        queue: limitedQueue,
+        currentIndex: 0,
+        todayEasy: [],
+        mode: "en-to-zh",
+      };
       saveSession(userId, sess);
     }
+
     setSession(sess);
     setMode(sess.mode);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,40 +112,42 @@ function StudyInner() {
 
   const handleFlip = useCallback(() => setFlipped((f) => !f), []);
 
+  // ── 核心：評分處理（修正版）──────────────────────
   const handleReview = useCallback((answer: "again" | "hard" | "good" | "easy") => {
     if (!session || !currentCard) return;
     stopSpeech();
 
-    incrementStat(userId, "studied");
+    // 統計：每次按評分都記
     incrementStat(userId, answer);
 
-    const remaining = session.queue.slice(session.currentIndex + 1);
-    let newQueue: string[];
-    let newEasy = [...session.todayEasy];
+    // 更新卡片 SRS 進度（長期記憶）
+    updateCardProgress(userId, currentCard.word, {
+      lastAnswer: answer,
+      reviews: 1, // updateCardProgress 內部會累加
+    });
 
-    if (answer === "again") {
-      // 插回佇列後面（同日再出現）
-      newQueue = [...remaining, currentCard.word];
-    } else if (answer === "easy") {
-      // 移出今日佇列，明天再說
-      newQueue = remaining.filter((w) => w !== currentCard.word);
-      newEasy = [...newEasy, currentCard.word];
-    } else {
-      // hard / good：繼續往下
-      newQueue = remaining;
-    }
+    // ─ 計算新的 remaining（目前卡片之後的卡片）─
+    const remaining = session.queue.slice(session.currentIndex + 1);
+
+    const { newRemaining, markEasy } = processReview(remaining, currentCard.word, answer);
+
+    // 新 easy 清單
+    const newEasy = markEasy
+      ? [...session.todayEasy, currentCard.word]
+      : session.todayEasy;
+
+    // 重新拼接完整 queue
+    // 已看過的部分（0..currentIndex）保持不變，後面換成 newRemaining
+    const seenPart = session.queue.slice(0, session.currentIndex + 1);
+    const fullQueue = [...seenPart, ...newRemaining];
 
     const newIndex = session.currentIndex + 1;
-    const fullQueue = [
-      ...session.queue.slice(0, session.currentIndex + 1),
-      ...newQueue,
-    ];
 
+    // 判斷是否完成（newIndex 超過最後）
     if (newIndex >= fullQueue.length) {
-      // 完成
       clearSession(userId, deckId);
       incrementStat(userId, "completed");
-      router.push(`/${userId}`);
+      router.push(`/${userId}?done=${deckId}`);
       return;
     }
 
@@ -134,6 +158,7 @@ function StudyInner() {
       todayEasy: newEasy,
       mode,
     };
+
     saveSession(userId, newSession);
     setSession(newSession);
     setFlipped(false);
@@ -199,7 +224,7 @@ function StudyInner() {
         <button className="btn-icon" onClick={() => { stopSpeech(); router.push(`/${userId}`); }} aria-label="返回">←</button>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 600, fontSize: "0.9375rem" }}>{deckId}</div>
-          <div className="text-xs text-muted">{progress + 1} / {totalInQueue}</div>
+          <div className="text-xs text-muted">第 {currentPos} 張 / 共 {totalInQueue} 張</div>
         </div>
         <button className="btn-icon" onClick={switchMode} title={mode === "en-to-zh" ? "正面：英文" : "正面：中文"}>
           {mode === "en-to-zh" ? "🇺🇸" : "🇨🇳"}
@@ -214,6 +239,12 @@ function StudyInner() {
         <div className="progress-bar">
           <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
         </div>
+        {/* 顯示「繼續學習」提示 */}
+        {session && session.currentIndex > 0 && (
+          <div className="text-xs text-muted" style={{ textAlign: "right", marginTop: "2px" }}>
+            已學 {session.currentIndex} 張
+          </div>
+        )}
       </div>
 
       {/* 語音設定面板 */}
@@ -229,7 +260,7 @@ function StudyInner() {
             <option value="">自動選擇（建議）</option>
             {voices.map((v) => <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>)}
           </select>
-          {([["rate", "語速", 0.5, 2.0], ["pitch", "音調", 0.5, 2.0], ["volume", "音量", 0, 1]] as const).map(([field, label, min, max]) => (
+          {(([["rate", "語速", 0.5, 2.0], ["pitch", "音調", 0.5, 2.0], ["volume", "音量", 0, 1]] as const)).map(([field, label, min, max]) => (
             <div key={field} style={{ marginBottom: "8px" }}>
               <div style={{ display: "flex", justifyContent: "space-between" }} className="text-sm">
                 <span className="text-muted">{label}</span>

@@ -1,15 +1,24 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { getUserConfigs, getUserConfig, saveAllUserConfigs, setPin, verifyPin } from "@/storage/users";
+import { getUserConfigs, setPin, verifyPin } from "@/storage/users";
 import { getSheetId, saveSettings, getSettings } from "@/storage/settings";
-import { syncCardStore } from "@/lib/cardStore";
-import type { UserConfig } from "@/lib/types";
+import {
+  syncCardStore, getAllCards, getAllDeckNames, getUserDecks,
+  getAllAssignments, updateLocalAssignment, getCardStoreSnapshot, initCardStore
+} from "@/lib/cardStore";
+import type { UserConfig, Assignment } from "@/lib/types";
 
 type AdminPhase = "pin" | "dashboard";
-type TabId = "users" | "settings";
+type TabId = "decks" | "users" | "settings";
 
 const ADMIN_IDS = ["mom", "dad"];
+const USER_LIST = [
+  { id: "brother1", name: "哥哥", emoji: "👦" },
+  { id: "brother2", name: "弟弟", emoji: "👦" },
+  { id: "mom",      name: "媽媽", emoji: "👩" },
+  { id: "dad",      name: "爸爸", emoji: "👨" },
+];
 
 export default function AdminPage() {
   const router = useRouter();
@@ -20,12 +29,29 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserConfig[]>([]);
   const [sheetId, setSheetIdState] = useState("");
   const [saved, setSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>("settings");
+  const [activeTab, setActiveTab] = useState<TabId>("decks");
   const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+
+  // Deck management state
+  const [deckNames, setDeckNames] = useState<string[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [expandedDeck, setExpandedDeck] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [storeSnap, setStoreSnap] = useState(getCardStoreSnapshot());
 
   useEffect(() => {
     setUsers(getUserConfigs());
-    setSheetIdState(getSheetId());
+    const sid = getSheetId();
+    setSheetIdState(sid);
+    if (sid) initCardStore(sid).then(refreshStore);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const refreshStore = useCallback(() => {
+    setDeckNames(getAllDeckNames());
+    setAssignments(getAllAssignments());
+    setStoreSnap(getCardStoreSnapshot());
   }, []);
 
   const handlePinSubmit = async () => {
@@ -36,7 +62,6 @@ export default function AdminPage() {
   };
 
   const handleSave = () => {
-    saveAllUserConfigs(users);
     saveSettings({ sheetId });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -44,11 +69,37 @@ export default function AdminPage() {
 
   const handleSync = async () => {
     if (!sheetId) { alert("請先儲存 Sheet ID"); return; }
+    saveSettings({ sheetId });
     setSyncing(true);
-    try { await syncCardStore(sheetId); }
-    finally { setSyncing(false); }
-    alert("同步完成！");
+    setSyncMsg("同步中...");
+    try {
+      await syncCardStore(sheetId);
+      refreshStore();
+      setSyncMsg(`✓ 同步完成，共 ${getCardStoreSnapshot().cardCount} 張`);
+    } catch {
+      setSyncMsg("⚠️ 同步失敗，請確認 Sheet ID 及共用設定");
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(""), 4000);
+    }
   };
+
+  const toggleAssignment = useCallback((userId: string, deckName: string, currentEnabled: boolean) => {
+    const existing = assignments.find(a => a.user === userId && a.deck === deckName);
+    const updated: Assignment = existing
+      ? { ...existing, enabled: !currentEnabled }
+      : { user: userId, deck: deckName, enabled: !currentEnabled, order: 99 };
+    updateLocalAssignment(updated);
+    setAssignments(prev => {
+      const idx = prev.findIndex(a => a.user === userId && a.deck === deckName);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = updated;
+        return next;
+      }
+      return [...prev, updated];
+    });
+  }, [assignments]);
 
   // ── PIN 登入畫面 ──────────────────────────────────
   if (phase === "pin") {
@@ -96,9 +147,11 @@ export default function AdminPage() {
                   if (pinInput.length < 4) setPinInput((p) => p + num.toString());
                 }}
                 style={{
-                  height: "56px", borderRadius: "var(--r-md)", background: num === "del" ? "var(--surface-2)" : num === null ? "transparent" : "var(--surface)",
+                  height: "56px", borderRadius: "var(--r-md)",
+                  background: num === "del" ? "var(--surface-2)" : num === null ? "transparent" : "var(--surface)",
                   border: "1px solid", borderColor: num === null ? "transparent" : "var(--border)",
-                  fontSize: num === "del" ? "1rem" : "1.25rem", fontWeight: 600, cursor: num === null ? "default" : "pointer",
+                  fontSize: num === "del" ? "1rem" : "1.25rem", fontWeight: 600,
+                  cursor: num === null ? "default" : "pointer",
                   color: "var(--text)", transition: "all 150ms ease",
                 }}>
                 {num === "del" ? "⌫" : num ?? ""}
@@ -127,10 +180,12 @@ export default function AdminPage() {
           {saved ? "✓ 已儲存" : "儲存"}
         </button>
       </div>
+
+      {/* 分頁列 */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 16px" }}>
-        {([["settings", "⚙️ 設定"], ["users", "👥 用戶"]] as const).map(([tab, label]) => (
+        {([["decks", "📦 牌組"], ["users", "👥 用戶"], ["settings", "⚙️ 設定"]] as const).map(([tab, label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)} style={{
-            padding: "12px 16px", fontSize: "0.875rem",
+            padding: "12px 14px", fontSize: "0.8125rem",
             fontWeight: activeTab === tab ? 700 : 400,
             color: activeTab === tab ? "var(--blue)" : "var(--text-muted)",
             borderBottom: "2px solid", borderColor: activeTab === tab ? "var(--blue)" : "transparent",
@@ -138,79 +193,210 @@ export default function AdminPage() {
           }}>{label}</button>
         ))}
       </div>
+
       <div className="page-content">
-        {/* ── 系統設定 ── */}
+
+        {/* ══════════════════════════════════════════════
+            📦 牌組管理
+        ══════════════════════════════════════════════ */}
+        {activeTab === "decks" && (
+          <div>
+            {/* 同步狀態卡片 */}
+            <div className="card" style={{ marginBottom: "16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <div style={{ fontWeight: 700 }}>📊 教材狀態</div>
+                <button className="btn btn-secondary" style={{ padding: "6px 14px", fontSize: "0.8125rem" }}
+                  onClick={handleSync} disabled={syncing || !sheetId}>
+                  {syncing ? "⏳" : "↻"} 同步
+                </button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                <div style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 12px" }}>
+                  <div className="text-xs text-muted">總單字數</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>{storeSnap.cardCount}</div>
+                </div>
+                <div style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 12px" }}>
+                  <div className="text-xs text-muted">牌組數量</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>{deckNames.length}</div>
+                </div>
+              </div>
+              {syncMsg && <div style={{ marginTop: "8px", fontSize: "0.8125rem", color: syncMsg.startsWith("✓") ? "var(--good)" : "var(--text-muted)" }}>{syncMsg}</div>}
+              {!sheetId && <div className="text-xs text-muted mt-2" style={{ color: "var(--again)" }}>⚠️ 尚未設定 Sheet ID，請先至「⚙️ 設定」分頁設定</div>}
+            </div>
+
+            {/* 牌組列表 */}
+            {deckNames.length === 0 ? (
+              <div className="card" style={{ textAlign: "center", padding: "40px 20px" }}>
+                <div style={{ fontSize: "2rem", marginBottom: "12px" }}>📭</div>
+                <div style={{ fontWeight: 600 }}>尚無牌組資料</div>
+                <div className="text-sm text-muted mt-2">請先設定 Sheet ID 並同步教材</div>
+                <button className="btn btn-primary mt-4" onClick={() => setActiveTab("settings")}>前往設定</button>
+              </div>
+            ) : (
+              <>
+                <input
+                  type="search" placeholder="🔍 搜尋牌組..."
+                  value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: "var(--r-lg)", border: "1px solid var(--border)", background: "var(--surface-2)", marginBottom: "12px", fontSize: "0.9375rem" }}
+                />
+                {deckNames.filter(d => d.toLowerCase().includes(searchTerm.toLowerCase())).map(deckName => {
+                  const deckCards = getAllCards().filter(c => c.deck === deckName);
+                  const isExpanded = expandedDeck === deckName;
+                  return (
+                    <div key={deckName} className="card" style={{ marginBottom: "12px" }}>
+                      {/* 牌組標頭 */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <button onClick={() => setExpandedDeck(isExpanded ? null : deckName)} style={{
+                          flex: 1, display: "flex", alignItems: "center", gap: "10px",
+                          background: "none", border: "none", textAlign: "left", cursor: "pointer", padding: 0
+                        }}>
+                          <div style={{ fontSize: "1.25rem" }}>{isExpanded ? "📂" : "📁"}</div>
+                          <div>
+                            <div style={{ fontWeight: 700, color: "var(--text)" }}>{deckName}</div>
+                            <div className="text-xs text-muted">{deckCards.length} 張單字</div>
+                          </div>
+                        </button>
+                      </div>
+
+                      {/* 展開：用戶指派切換 */}
+                      {isExpanded && (
+                        <div style={{ marginTop: "14px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
+                          <div className="text-xs text-muted" style={{ marginBottom: "8px", fontWeight: 600 }}>指派給成員</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "12px" }}>
+                            {USER_LIST.map(({ id, name, emoji }) => {
+                              const asgn = assignments.find(a => a.user === name && a.deck === deckName);
+                              const isEnabled = asgn?.enabled ?? false;
+                              return (
+                                <button key={id} onClick={() => toggleAssignment(name, deckName, isEnabled)}
+                                  style={{
+                                    display: "flex", alignItems: "center", gap: "8px", padding: "10px 12px",
+                                    borderRadius: "var(--r-md)", border: "2px solid",
+                                    borderColor: isEnabled ? "var(--good)" : "var(--border)",
+                                    background: isEnabled ? "rgba(52,199,89,0.08)" : "var(--surface-2)",
+                                    cursor: "pointer", transition: "all 150ms ease",
+                                  }}>
+                                  <span style={{ fontSize: "1.25rem" }}>{emoji}</span>
+                                  <span style={{ fontWeight: 600, color: "var(--text)", fontSize: "0.875rem" }}>{name}</span>
+                                  <span style={{ marginLeft: "auto", fontSize: "0.875rem" }}>{isEnabled ? "✅" : "○"}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {/* 單字預覽 */}
+                          <div className="text-xs text-muted" style={{ marginBottom: "6px", fontWeight: 600 }}>單字預覽（前10張）</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                            {deckCards.slice(0, 10).map(c => (
+                              <span key={c.word} style={{
+                                padding: "3px 8px", borderRadius: "var(--r-full)",
+                                background: "var(--surface-2)", fontSize: "0.75rem", color: "var(--text)"
+                              }}>
+                                {c.word}
+                                <span className="text-muted" style={{ marginLeft: "4px" }}>{c.meaning}</span>
+                              </span>
+                            ))}
+                            {deckCards.length > 10 && (
+                              <span style={{ padding: "3px 8px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                                +{deckCards.length - 10} 更多...
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════
+            👥 用戶管理
+        ══════════════════════════════════════════════ */}
+        {activeTab === "users" && (
+          <div>
+            {users.map((u) => {
+              const userDecks = assignments.filter(a =>
+                a.user === (USER_LIST.find(ul => ul.id === u.id)?.name ?? u.name) && a.enabled
+              );
+              return (
+                <div key={u.id} className="card" style={{ marginBottom: "16px" }}>
+                  <div style={{ fontWeight: 700, marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "1.5rem" }}>
+                      {u.id === "brother1" ? "👦" : u.id === "brother2" ? "👦" : u.id === "mom" ? "👩" : "👨"}
+                    </span>
+                    {u.name}
+                    <span className={`badge ${u.role === "admin" ? "badge-blue" : "badge-green"}`}>
+                      {u.role === "admin" ? "管理者" : "學習者"}
+                    </span>
+                  </div>
+                  {/* 已指派的牌組 */}
+                  <div className="text-xs text-muted" style={{ marginBottom: "6px" }}>已指派牌組（{userDecks.length} 個）</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+                    {userDecks.length === 0 ? (
+                      <span className="text-xs text-muted">尚未指派任何牌組</span>
+                    ) : userDecks.map(a => (
+                      <span key={a.deck} style={{
+                        padding: "4px 10px", borderRadius: "var(--r-full)",
+                        background: "rgba(52,199,89,0.12)", fontSize: "0.8125rem", color: "var(--good)", fontWeight: 600
+                      }}>{a.deck}</span>
+                    ))}
+                  </div>
+                  {ADMIN_IDS.includes(u.id) && (
+                    <div style={{ borderTop: "1px solid var(--border)", paddingTop: "10px", marginTop: "4px" }}>
+                      <label className="text-xs text-muted" style={{ display: "block", marginBottom: "4px" }}>修改 PIN 碼</label>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <input type="password" maxLength={4} placeholder="新 PIN（4位數）" id={`pin-${u.id}`}
+                          style={{ flex: 1, padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border)", background: "var(--surface-2)", fontSize: "1rem" }}
+                        />
+                        <button className="btn btn-secondary" onClick={async () => {
+                          const el = document.getElementById(`pin-${u.id}`) as HTMLInputElement;
+                          if (el?.value?.length === 4) { await setPin(u.id, el.value); el.value = ""; alert(`${u.name} 的 PIN 已更新`); }
+                          else alert("請輸入 4 位數字");
+                        }}>更新</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════
+            ⚙️ 系統設定
+        ══════════════════════════════════════════════ */}
         {activeTab === "settings" && (
           <div>
             <div className="card" style={{ marginBottom: "16px" }}>
               <div style={{ fontWeight: 700, marginBottom: "12px" }}>📊 Google Sheets 設定</div>
               <label className="text-xs text-muted" style={{ display: "block", marginBottom: "4px" }}>試算表 ID（從 URL 取得）</label>
-              <input type="text" value={sheetId} placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+              <input type="text" value={sheetId}
+                placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
                 onChange={(e) => setSheetIdState(e.target.value)}
-                style={{ width: "100%", padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border)", background: "var(--surface-2)", fontSize: "0.875rem", fontFamily: "monospace", marginBottom: "8px" }}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border)", background: "var(--surface-2)", fontSize: "0.8125rem", fontFamily: "monospace", marginBottom: "8px" }}
               />
               <div className="text-xs text-muted">URL 格式：docs.google.com/spreadsheets/d/<strong>試算表ID</strong>/edit</div>
               <div className="text-xs text-muted mt-1">⚠️ 試算表需設為「知道連結的任何人皆可檢視」</div>
-              <button className="btn btn-secondary w-full mt-3" onClick={handleSync} disabled={syncing || !sheetId}>
-                {syncing ? "⏳ 同步中..." : "↻ 立即同步教材"}
-              </button>
+              <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={handleSave}>💾 儲存 ID</button>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSync} disabled={syncing || !sheetId}>
+                  {syncing ? "⏳ 同步中..." : "↻ 立即同步"}
+                </button>
+              </div>
+              {syncMsg && <div style={{ marginTop: "8px", fontSize: "0.8125rem", color: syncMsg.startsWith("✓") ? "var(--good)" : "var(--text-muted)" }}>{syncMsg}</div>}
             </div>
+
             <div className="card" style={{ marginBottom: "16px" }}>
               <div style={{ fontWeight: 700, marginBottom: "8px" }}>📋 Sheets 工作表格式</div>
-              <div style={{ fontFamily: "monospace", fontSize: "0.75rem", background: "var(--surface-2)", padding: "10px", borderRadius: "var(--r-sm)", lineHeight: 1.8, overflowX: "auto" }}>
-                <div><strong>Vocabulary</strong>：Word | Meaning | PartOfSpeech | Example | ExampleChinese | Synonyms | Root | Level | Deck</div>
-                <div><strong>Assignments</strong>：User | Deck | Enabled | Order</div>
+              <div style={{ fontFamily: "monospace", fontSize: "0.75rem", background: "var(--surface-2)", padding: "12px", borderRadius: "var(--r-sm)", lineHeight: 2, overflowX: "auto" }}>
+                <div><strong>Vocabulary</strong>（工作表1）</div>
+                <div style={{ color: "var(--text-muted)" }}>Word | Meaning | PartOfSpeech | Example | ExampleChinese | Synonyms | Root | Level | Deck</div>
+                <div style={{ marginTop: "8px" }}><strong>Assignments</strong>（工作表2）</div>
+                <div style={{ color: "var(--text-muted)" }}>User | Deck | Enabled | Order</div>
               </div>
-            </div>
-            <div className="card">
-              <div style={{ fontWeight: 700, marginBottom: "12px" }}>🔐 修改 PIN 碼</div>
-              {users.filter(u => ADMIN_IDS.includes(u.id)).map((u) => (
-                <div key={u.id} style={{ marginBottom: "12px" }}>
-                  <div className="text-sm" style={{ fontWeight: 600, marginBottom: "4px" }}>{u.id === "mom" ? "👩" : "👨"} {u.name}</div>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <input type="password" maxLength={4} placeholder="新 PIN（4位數）" id={`pin-${u.id}`}
-                      style={{ flex: 1, padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border)", background: "var(--surface-2)", fontSize: "1rem" }}
-                    />
-                    <button className="btn btn-secondary" onClick={async () => {
-                      const el = document.getElementById(`pin-${u.id}`) as HTMLInputElement;
-                      if (el?.value?.length === 4) { await setPin(u.id, el.value); el.value = ""; alert(`${u.name} 的 PIN 已更新`); }
-                      else alert("請輸入 4 位數字");
-                    }}>更新</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {/* ── 用戶管理 ── */}
-        {activeTab === "users" && (
-          <div>
-            {users.map((u, idx) => (
-              <div key={u.id} className="card" style={{ marginBottom: "16px" }}>
-                <div style={{ fontWeight: 700, marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "1.5rem" }}>{u.id === "brother1" ? "👦" : u.id === "brother2" ? "👦" : u.id === "mom" ? "👩" : "👨"}</span>
-                  {u.name}
-                  <span className={`badge ${u.role === "admin" ? "badge-blue" : "badge-green"}`}>{u.role === "admin" ? "管理者" : "學習者"}</span>
-                </div>
-                <label className="text-xs text-muted" style={{ display: "block", marginBottom: "4px" }}>顯示名稱</label>
-                <input type="text" value={u.name} onChange={(e) => { const n = [...users]; n[idx] = { ...u, name: e.target.value }; setUsers(n); }}
-                  style={{ width: "100%", padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border)", background: "var(--surface-2)", marginBottom: "10px", fontSize: "0.9375rem" }}
-                />
-                <label className="text-xs text-muted" style={{ display: "block", marginBottom: "4px" }}>大頭照 URL（Google Drive 公開連結）</label>
-                <input type="text" value={u.photoUrl} placeholder="https://drive.google.com/uc?id=..."
-                  onChange={(e) => { const n = [...users]; n[idx] = { ...u, photoUrl: e.target.value }; setUsers(n); }}
-                  style={{ width: "100%", padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border)", background: "var(--surface-2)", fontSize: "0.875rem", fontFamily: "monospace" }}
-                />
-              </div>
-            ))}
-            <div className="card">
-              <div style={{ fontWeight: 700, marginBottom: "8px" }}>💡 牌組指派</div>
-              <div className="text-sm text-muted">牌組指派請直接在 Google Sheets 的 Assignments 工作表中設定：</div>
-              <div style={{ fontFamily: "monospace", fontSize: "0.8125rem", background: "var(--surface-2)", padding: "10px", borderRadius: "var(--r-sm)", marginTop: "8px", lineHeight: 1.8 }}>
-                User | Deck | Enabled | Order<br />
-                哥哥 | 國中1200 | TRUE | 1<br />
-                弟弟 | 國小500 | TRUE | 1<br />
-                媽媽 | TOEIC | TRUE | 1
+              <div className="text-xs text-muted mt-2">
+                ✏️ 單字的新增、修改、刪除請直接在 Google Sheets 中操作，完成後點「同步」即可更新。
               </div>
             </div>
           </div>

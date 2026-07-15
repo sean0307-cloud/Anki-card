@@ -1,11 +1,20 @@
 // ============================================================
-// SRS 排程邏輯
-// Again → 插入第3張後（不足則最後）
-// Hard  → 插入第7張後（不足則最後）
+// SRS 排程邏輯 v2.1
+// Again → 插入第3張後（不足則放最後）
+// Hard  → 插入第7張後（不足則放最後）
 // Good  → 排到最後
-// Easy  → 今天不再出現，明天恢復
+// Easy  → 今天不再出現
+//
+// ★ 核心規則（問題1修正）：
+//   remaining.length < 設定間隔 → 放最後（不消失）
+//   remaining.length >= 設定間隔 → 按照設定位置插入
 // ============================================================
 type ReviewAnswer = "again" | "hard" | "good" | "easy";
+
+export const SRS_INTERVALS = {
+  again: 3,
+  hard: 7,
+} as const;
 
 export function insertAt(arr: string[], item: string, pos: number): string[] {
   const copy = [...arr];
@@ -16,39 +25,57 @@ export function insertAt(arr: string[], item: string, pos: number): string[] {
 
 /**
  * 處理複習回答，回傳更新後的佇列
- * @param queue      剩餘佇列（currentIndex 之後的卡片）
+ * @param remaining  當前卡片「之後」的所有卡片（不含目前這張）
  * @param wordId     當前卡片 ID
  * @param answer     用戶選擇
- * @returns          更新後的佇列
+ *
+ * 修正說明：
+ *   - again/hard：若 remaining.length < interval → 放最後，否則插入對應位置
+ *   - good：永遠放最後
+ *   - easy：從佇列移除（今日不再出現）
  */
 export function processReview(
-  queue: string[],   // 當前卡片之後的所有卡片
+  remaining: string[],   // 當前卡片之後的所有卡片
   wordId: string,
   answer: ReviewAnswer
-): { newQueue: string[]; markEasy: boolean } {
-  let newQueue = [...queue];
+): { newRemaining: string[]; markEasy: boolean } {
+  let newRemaining = [...remaining];
   let markEasy = false;
 
   switch (answer) {
-    case "again":
-      // 插入第3張後（index 3），不足則放最後
-      newQueue = insertAt(queue, wordId, 3);
+    case "again": {
+      const interval = SRS_INTERVALS.again;
+      if (newRemaining.length < interval) {
+        // 剩餘不足間隔 → 放最後
+        newRemaining = [...newRemaining, wordId];
+      } else {
+        // 剩餘充足 → 插入第3位
+        newRemaining = insertAt(newRemaining, wordId, interval);
+      }
       break;
-    case "hard":
-      // 插入第7張後（index 7），不足則放最後
-      newQueue = insertAt(queue, wordId, 7);
+    }
+    case "hard": {
+      const interval = SRS_INTERVALS.hard;
+      if (newRemaining.length < interval) {
+        // 剩餘不足間隔 → 放最後
+        newRemaining = [...newRemaining, wordId];
+      } else {
+        // 剩餘充足 → 插入第7位
+        newRemaining = insertAt(newRemaining, wordId, interval);
+      }
       break;
+    }
     case "good":
-      // 排到最後
-      newQueue = [...queue, wordId];
+      // 永遠放最後（確保今天還能再看一次）
+      newRemaining = [...newRemaining, wordId];
       break;
     case "easy":
-      // 今天不再出現，明天恢復
+      // 今天不再出現
       markEasy = true;
       break;
   }
 
-  return { newQueue, markEasy };
+  return { newRemaining, markEasy };
 }
 
 /**

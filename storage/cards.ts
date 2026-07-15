@@ -26,7 +26,10 @@ export function updateCardProgress(
 ): void {
   if (typeof window === "undefined") return;
   const all = getCardProgress(userId);
-  all[word] = { ...(all[word] ?? { word, interval: 1, easeFactor: 2.5, reviews: 0, nextReview: "" }), ...patch };
+  const existing = all[word] ?? { word, interval: 1, easeFactor: 2.5, reviews: 0, nextReview: "" };
+  // reviews 是累加（不覆蓋）
+  const newReviews = existing.reviews + (patch.reviews ?? 0);
+  all[word] = { ...existing, ...patch, reviews: newReviews };
   localStorage.setItem(STORAGE_KEYS.CARD_PROGRESS(userId), JSON.stringify(all));
 }
 
