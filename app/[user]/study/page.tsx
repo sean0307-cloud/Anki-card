@@ -110,7 +110,15 @@ function StudyInner() {
     if (!flipped) setAutoPlayDone(false);
   }, [flipped, currentCard, autoPlayDone, speechSettings]);
 
-  const handleFlip = useCallback(() => setFlipped((f) => !f), []);
+  const handleFlip = useCallback(() => {
+    setFlipped((f) => {
+      if (!f) {
+        // 正面→背面：記錄「看過一張」
+        incrementStat(userId, "studied");
+      }
+      return !f;
+    });
+  }, [userId]);
 
   // ── 核心：評分處理（修正版）──────────────────────
   const handleReview = useCallback((answer: "again" | "hard" | "good" | "easy") => {

@@ -1,11 +1,13 @@
 "use client";
 import { useEffect, useState, useCallback, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
-import { Card, QuizQuestion, QuizResult } from "@/lib/types";
-import { getSheetId, saveQuizScore, getUserConfig } from "@/lib/storage";
-import { fetchVocabulary } from "@/lib/sheets";
+import type { Card, QuizQuestion, QuizResult } from "@/lib/types";
+import { getDeckCards, getCardStoreSnapshot, initCardStore } from "@/lib/cardStore";
+import { getSheetId } from "@/storage/settings";
+import { saveQuizScore } from "@/storage/progress";
 import { generateQuiz, calcScore } from "@/lib/quiz";
 import { speakWord, stopSpeech } from "@/lib/speech";
+import { useCards } from "@/hooks/useCards";
 
 const DEMO_CARDS: Card[] = [
   { word: "abandon", meaning: "放棄；遺棄", partOfSpeech: "vt.", example: "He abandoned the car by the road.", exampleChinese: "他把車遺棄在路邊。", synonyms: "desert, forsake", root: "ab-(離開)+don(給予)", level: "B1", deck: "demo" },
@@ -24,6 +26,10 @@ function QuizInner() {
   const userId = params.user as string;
   const deckId = searchParams.get("deck") ?? "demo";
 
+  const { isLoaded } = useCards(deckId);
+  const rawCards = isLoaded ? getDeckCards(deckId) : [];
+  const cards = rawCards.length > 0 ? rawCards : DEMO_CARDS;
+
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
@@ -33,20 +39,12 @@ function QuizInner() {
   const [showChinese, setShowChinese] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      let allCards: Card[] = [];
-      const sheetId = getSheetId();
-      if (sheetId) {
-        const all = await fetchVocabulary(sheetId);
-        allCards = all.filter((c) => c.deck === deckId);
-      }
-      if (allCards.length === 0) allCards = DEMO_CARDS;
-      const qs = generateQuiz(allCards, allCards);
-      setQuestions(qs.slice(0, Math.min(qs.length, 20)));
-      setLoading(false);
-    })();
-  }, [deckId]);
+    if (!isLoaded) return;
+    setLoading(true);
+    const qs = generateQuiz(cards, cards);
+    setQuestions(qs.slice(0, Math.min(qs.length, 20)));
+    setLoading(false);
+  }, [isLoaded, deckId]);
 
   const handleSelect = useCallback((option: string) => {
     if (selected !== null) return;
@@ -54,14 +52,14 @@ function QuizInner() {
     const q = questions[currentQ];
     const correct = option === q.answer;
     setResults((prev) => [...prev, { questionIndex: currentQ, wordId: q.wordId, userAnswer: option, correct }]);
-    if (correct) speakWord(q.wordId);
+    if (correct) speakWord(q.wordId, { voiceName: "", rate: 1, pitch: 1, volume: 1 });
   }, [selected, questions, currentQ]);
 
   const handleNext = useCallback(() => {
     stopSpeech();
-    const newResults = [...results];
     if (currentQ + 1 >= questions.length) {
-      const score = calcScore(newResults.filter(r => r.correct).length, newResults.length);
+      const correctCount = results.filter(r => r.correct).length + (selected === questions[currentQ]?.answer ? 1 : 0);
+      const score = calcScore(results.filter(r => r.correct).length, results.length);
       saveQuizScore(userId, score);
       setPhase("result");
     } else {
@@ -69,9 +67,9 @@ function QuizInner() {
       setSelected(null);
       setShowChinese(false);
     }
-  }, [currentQ, questions, results, userId]);
+  }, [currentQ, questions, results, selected, userId]);
 
-  if (loading) {
+  if (loading || !isLoaded) {
     return (
       <div className="page" style={{ alignItems: "center", justifyContent: "center" }}>
         <div style={{ fontSize: "2rem", animation: "pulse 1.5s infinite" }}>📝</div>
@@ -86,7 +84,7 @@ function QuizInner() {
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: "3rem" }}>📭</div>
           <h2 style={{ fontWeight: 700, marginTop: "16px" }}>無法生成測驗</h2>
-          <p className="text-muted mt-2">單字數量不足，請確保至少有 4 張卡片</p>
+          <p className="text-muted mt-2">單字數量不足（至少需要 4 張卡片）</p>
           <button className="btn btn-primary mt-4" onClick={() => router.push(`/${userId}`)}>返回</button>
         </div>
       </div>
@@ -111,27 +109,40 @@ function QuizInner() {
             <div style={{ fontSize: "3rem", marginBottom: "12px" }}>
               {score >= 80 ? "🎉" : score >= 60 ? "👍" : "💪"}
             </div>
-            <div style={{ fontSize: "3rem", fontWeight: 800, color: score >= 80 ? "var(--good)" : score >= 60 ? "var(--hard)" : "var(--again)", lineHeight: 1 }}>
-              {score}分
+            <div style={{ fontSize: "3.5rem", fontWeight: 800, lineHeight: 1, color: score >= 80 ? "var(--good)" : score >= 60 ? "var(--hard)" : "var(--again)" }}>
+              {score}
             </div>
+            <div className="text-muted" style={{ fontSize: "0.875rem", marginTop: "4px" }}>分</div>
             <div className="text-muted mt-2">{correctCount} / {total} 題正確</div>
+            <div style={{ marginTop: "20px", display: "flex", justifyContent: "center", gap: "24px" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "1.5rem", fontWeight: 700, color: "var(--good)" }}>{correctCount}</div>
+                <div className="text-xs text-muted">答對</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "1.5rem", fontWeight: 700, color: "var(--again)" }}>{total - correctCount}</div>
+                <div className="text-xs text-muted">答錯</div>
+              </div>
+            </div>
           </div>
 
           {wrongOnes.length > 0 && (
-            <div>
+            <div style={{ marginBottom: "20px" }}>
               <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "12px" }}>
                 需要加強的單字
               </div>
               {wrongOnes.map((r) => {
                 const q = questions[r.questionIndex];
+                const card = cards.find(c => c.word === q.wordId);
                 return (
                   <div key={r.questionIndex} className="card" style={{ marginBottom: "10px", padding: "14px 16px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
                         <div style={{ fontWeight: 700 }}>{q.wordId}</div>
-                        <div className="text-xs text-muted mt-1">
-                          你答：<span style={{ color: "var(--again)" }}>{r.userAnswer}</span>
-                          {" · "}正確：<span style={{ color: "var(--good)" }}>{q.answer}</span>
+                        {card && <div className="text-xs text-muted">{card.meaning}</div>}
+                        <div className="text-xs" style={{ marginTop: "6px" }}>
+                          你答：<span style={{ color: "var(--again)", fontWeight: 600 }}>{r.userAnswer}</span>
+                          {" · "}正確：<span style={{ color: "var(--good)", fontWeight: 600 }}>{q.answer}</span>
                         </div>
                       </div>
                       <span className="badge badge-red">✗</span>
@@ -142,7 +153,7 @@ function QuizInner() {
             </div>
           )}
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "20px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
             <button className="btn btn-primary" onClick={() => { setPhase("quiz"); setCurrentQ(0); setSelected(null); setResults([]); setShowChinese(false); }}>
               🔁 再測一次
             </button>
@@ -209,7 +220,8 @@ function QuizInner() {
                 {q.prompt}
               </div>
               {q.type === "en-to-zh" && (
-                <button className="btn-icon mt-3" style={{ margin: "12px auto 0", fontSize: "1.25rem" }} onClick={() => speakWord(q.wordId)} aria-label="播放發音">
+                <button className="btn-icon mt-3" style={{ margin: "12px auto 0", fontSize: "1.25rem" }}
+                  onClick={() => speakWord(q.wordId, { voiceName: "", rate: 1, pitch: 1, volume: 1 })} aria-label="播放發音">
                   🔊
                 </button>
               )}
