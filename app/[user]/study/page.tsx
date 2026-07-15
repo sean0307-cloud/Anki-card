@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useRef, Suspense } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import type { Card, CardMode, SessionState } from "@/lib/types";
 import { DAILY_NEW_CARD_LIMIT } from "@/lib/constants";
@@ -7,11 +7,9 @@ import { getDeckCards } from "@/lib/cardStore";
 import { useCards } from "@/hooks/useCards";
 import { getSession, saveSession, clearSession, updateCardProgress } from "@/storage/cards";
 import { incrementStat } from "@/storage/progress";
-import { getSettings } from "@/storage/settings";
+import { getSettings, saveSettings } from "@/storage/settings";
 import { processReview, buildDailyQueue, getTodayDate } from "@/lib/scheduler";
 import { speakWord, speakSentence, stopSpeech, onVoicesReady, getAvailableVoices } from "@/lib/speech";
-import { saveSettings } from "@/storage/settings";
-import type { SpeechSettings } from "@/lib/types";
 
 // Demo cards（Sheet 未設定時使用）
 const DEMO_CARDS: Card[] = [
@@ -21,10 +19,13 @@ const DEMO_CARDS: Card[] = [
   { word: "accurate", meaning: "精確的；正確的", partOfSpeech: "adj.", example: "The weather forecast was accurate this time.", exampleChinese: "這次天氣預報很準確。", synonyms: "precise, exact", root: "ac-(to)+cura(care)", level: "B1", deck: "demo" },
 ];
 
-// ── Session 結構說明 ──────────────────────────────────
-// queue: 完整的「今日待學習」列表（含 again/hard 插回的）
-// currentIndex: 目前在學第幾張（0-based）
-// ─────────────────────────────────────────────────────
+interface SessionSummary {
+  totalStudied: number;
+  againList: string[];
+  hardList: string[];
+  goodCount: number;
+  easyCount: number;
+}
 
 function StudyInner() {
   const router = useRouter();
@@ -38,8 +39,17 @@ function StudyInner() {
   const [mode, setMode] = useState<CardMode>("en-to-zh");
   const [showSpeech, setShowSpeech] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [speechSettings, setSpeechSettingsState] = useState<SpeechSettings>(() => getSettings().speech);
+  const [speechSettings, setSpeechSettingsState] = useState(() => getSettings().speech);
   const [autoPlayDone, setAutoPlayDone] = useState(false);
+
+  // 🫳 手勢控制設定狀態
+  const [gestureEnabled, setGestureEnabled] = useState(() => getSettings().gesture ?? true);
+
+  // 🏁 學習回顧階段狀態
+  const [summary, setSummary] = useState<SessionSummary | null>(null);
+
+  // 觸控手勢座標追蹤
+  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
 
   // ── 取得卡片（來自 CardStore，不再直接 fetch）
   const { isLoaded, isLoading } = useCards(deckId);
@@ -54,26 +64,31 @@ function StudyInner() {
     ? (cardMap[session.queue[session.currentIndex]] ?? null)
     : null;
 
-  // ── 進度計算（動態，因為 again/hard 會把卡片放回去）
-  // queue.length 是當前總張數（含重複），currentIndex 是已完成張數
+  // ── 進度計算
   const totalInQueue = session?.queue.length ?? 0;
-  const currentPos = (session?.currentIndex ?? 0) + 1; // 顯示用（1-based）
+  const currentPos = (session?.currentIndex ?? 0) + 1;
   const pct = totalInQueue > 0 ? Math.round(((session?.currentIndex ?? 0) / totalInQueue) * 100) : 0;
 
-  // ── 建立 / 恢復 session ───────────────────────────
+  // 初始化 summary
+  const [localSummaryState, setLocalSummaryState] = useState<SessionSummary>({
+    totalStudied: 0,
+    againList: [],
+    hardList: [],
+    goodCount: 0,
+    easyCount: 0,
+  });
+
+  // ── 建立 / 恢復 session
   useEffect(() => {
     if (!isLoaded && rawCards.length === 0) return;
 
     const today = getTodayDate();
     const saved = getSession(userId, deckId);
-
     let sess: SessionState;
 
     if (saved && saved.date === today && saved.queue.length > 0 && saved.currentIndex < saved.queue.length) {
-      // ✅ 今天有未完成的 session → 繼續
       sess = saved;
     } else {
-      // 新 session（新的一天 or 第一次）
       const queue = buildDailyQueue(
         cards.map((c) => c.word),
         saved?.todayEasy ?? [],
@@ -113,49 +128,57 @@ function StudyInner() {
   const handleFlip = useCallback(() => {
     setFlipped((f) => {
       if (!f) {
-        // 正面→背面：記錄「看過一張」
         incrementStat(userId, "studied");
+        setLocalSummaryState(s => ({ ...s, totalStudied: s.totalStudied + 1 }));
       }
       return !f;
     });
   }, [userId]);
 
-  // ── 核心：評分處理（修正版）──────────────────────
+  // ── 評分處理 ──
   const handleReview = useCallback((answer: "again" | "hard" | "good" | "easy") => {
     if (!session || !currentCard) return;
     stopSpeech();
 
-    // 統計：每次按評分都記
     incrementStat(userId, answer);
-
-    // 更新卡片 SRS 進度（長期記憶）
     updateCardProgress(userId, currentCard.word, {
       lastAnswer: answer,
-      reviews: 1, // updateCardProgress 內部會累加
+      reviews: 1,
     });
 
-    // ─ 計算新的 remaining（目前卡片之後的卡片）─
+    // 累積本次學習回顧資訊
+    setLocalSummaryState(s => {
+      const agains = answer === "again" && !s.againList.includes(currentCard.word) ? [...s.againList, currentCard.word] : s.againList;
+      const hards = answer === "hard" && !s.hardList.includes(currentCard.word) ? [...s.hardList, currentCard.word] : s.hardList;
+      return {
+        ...s,
+        againList: agains,
+        hardList: hards,
+        goodCount: s.goodCount + (answer === "good" ? 1 : 0),
+        easyCount: s.easyCount + (answer === "easy" ? 1 : 0),
+      };
+    });
+
     const remaining = session.queue.slice(session.currentIndex + 1);
-
     const { newRemaining, markEasy } = processReview(remaining, currentCard.word, answer);
+    const newEasy = markEasy ? [...session.todayEasy, currentCard.word] : session.todayEasy;
 
-    // 新 easy 清單
-    const newEasy = markEasy
-      ? [...session.todayEasy, currentCard.word]
-      : session.todayEasy;
-
-    // 重新拼接完整 queue
-    // 已看過的部分（0..currentIndex）保持不變，後面換成 newRemaining
     const seenPart = session.queue.slice(0, session.currentIndex + 1);
     const fullQueue = [...seenPart, ...newRemaining];
-
     const newIndex = session.currentIndex + 1;
 
-    // 判斷是否完成（newIndex 超過最後）
+    // 判斷是否完成
     if (newIndex >= fullQueue.length) {
       clearSession(userId, deckId);
       incrementStat(userId, "completed");
-      router.push(`/${userId}?done=${deckId}`);
+      // 切換至回顧頁面
+      setSummary({
+        totalStudied: localSummaryState.totalStudied + 1,
+        againList: answer === "again" && !localSummaryState.againList.includes(currentCard.word) ? [...localSummaryState.againList, currentCard.word] : localSummaryState.againList,
+        hardList: answer === "hard" && !localSummaryState.hardList.includes(currentCard.word) ? [...localSummaryState.hardList, currentCard.word] : localSummaryState.hardList,
+        goodCount: localSummaryState.goodCount + (answer === "good" ? 1 : 0),
+        easyCount: localSummaryState.easyCount + (answer === "easy" ? 1 : 0),
+      });
       return;
     }
 
@@ -170,7 +193,45 @@ function StudyInner() {
     saveSession(userId, newSession);
     setSession(newSession);
     setFlipped(false);
-  }, [session, currentCard, userId, deckId, mode, router]);
+  }, [session, currentCard, userId, deckId, mode, localSummaryState]);
+
+  // 🫳 手勢事件綁定
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (!gestureEnabled) return;
+    const touch = e.touches[0];
+    setTouchStart({ x: touch.clientX, y: touch.clientY });
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (!gestureEnabled || !touchStart || !currentCard) return;
+    const touch = e.changedTouches[0];
+    const diffX = touch.clientX - touchStart.x;
+    const diffY = touch.clientY - touchStart.y;
+    const distanceThreshold = 65;
+
+    // 判斷是橫向還是縱向滑動
+    if (Math.abs(diffX) > Math.abs(diffY)) {
+      // 橫向滑動
+      if (Math.abs(diffX) > distanceThreshold) {
+        if (!flipped) {
+          // 未翻面：左右滑動皆翻面
+          handleFlip();
+        } else {
+          // 已翻面：右滑 Good，左滑 Again
+          if (diffX > 0) handleReview("good");
+          else handleReview("again");
+        }
+      }
+    } else {
+      // 縱向滑動
+      if (Math.abs(diffY) > distanceThreshold && flipped) {
+        // 下滑 Hard，上滑 Easy
+        if (diffY > 0) handleReview("hard");
+        else handleReview("easy");
+      }
+    }
+    setTouchStart(null);
+  };
 
   const switchMode = useCallback(() => {
     const newMode: CardMode = mode === "en-to-zh" ? "zh-to-en" : "en-to-zh";
@@ -182,10 +243,16 @@ function StudyInner() {
     }
   }, [mode, session, userId]);
 
-  const updateSpeech = (patch: Partial<SpeechSettings>) => {
+  const updateSpeech = (patch: Partial<typeof speechSettings>) => {
     const updated = { ...speechSettings, ...patch };
     setSpeechSettingsState(updated);
     saveSettings({ speech: updated });
+  };
+
+  const toggleGesture = () => {
+    const nextVal = !gestureEnabled;
+    setGestureEnabled(nextVal);
+    saveSettings({ gesture: nextVal });
   };
 
   // ── Loading 畫面
@@ -198,16 +265,75 @@ function StudyInner() {
     );
   }
 
-  // ── 完成畫面
-  if (session && (session.currentIndex >= session.queue.length || session.queue.length === 0)) {
+  // 🏁 學習回顧完成畫面
+  if (summary) {
     return (
-      <div className="page" style={{ alignItems: "center", justifyContent: "center", padding: "40px" }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "16px" }}>🎉</div>
-          <h2 style={{ fontSize: "1.5rem", fontWeight: 700 }}>今日完成！</h2>
-          <p className="text-muted mt-2">所有卡片學習完畢</p>
-          <button className="btn btn-primary mt-4" style={{ borderRadius: "var(--r-lg)", padding: "14px 32px" }} onClick={() => router.push(`/${userId}`)}>
-            返回首頁
+      <div className="page">
+        <div className="page-header">
+          <div style={{ fontWeight: 700, flex: 1, textAlign: "center" }}>✨ 學習成果回顧</div>
+        </div>
+        <div className="page-content" style={{ paddingBottom: "40px" }}>
+          <div className="card animate-fade-in" style={{ textAlign: "center", padding: "32px 20px", marginBottom: "20px" }}>
+            <div style={{ fontSize: "3.5rem" }}>🎉</div>
+            <h2 className="mt-2" style={{ fontWeight: 800 }}>本輪學習完成！</h2>
+            <p className="text-muted text-sm mt-1">您今天又往前邁進了一步！</p>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px", marginTop: "24px" }}>
+              <div style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 4px" }}>
+                <div style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--again)" }}>{summary.againList.length}</div>
+                <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Again</div>
+              </div>
+              <div style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 4px" }}>
+                <div style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--hard)" }}>{summary.hardList.length}</div>
+                <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Hard</div>
+              </div>
+              <div style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 4px" }}>
+                <div style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--good)" }}>{summary.goodCount}</div>
+                <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Good</div>
+              </div>
+              <div style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 4px" }}>
+                <div style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--blue)" }}>{summary.easyCount}</div>
+                <div style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>Easy</div>
+              </div>
+            </div>
+          </div>
+
+          {/* 需要加強的複習清單 */}
+          {(summary.againList.length > 0 || summary.hardList.length > 0) && (
+            <div style={{ marginBottom: "24px" }}>
+              <div style={{ fontSize: "0.8125rem", color: "var(--text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "10px" }}>
+                ✍️ 本次不熟的單字，點擊可播音：
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {[...summary.againList, ...summary.hardList].map((word) => {
+                  const card = cardMap[word];
+                  return (
+                    <button
+                      key={word}
+                      onClick={() => speakWord(word, speechSettings)}
+                      style={{
+                        width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+                        padding: "14px 18px", borderRadius: "var(--r-md)", background: "var(--surface)",
+                        border: "1px solid var(--border)", textAlign: "left", cursor: "pointer",
+                        transition: "all 150ms ease"
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = "var(--surface-2)"}
+                      onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = "var(--surface)"}
+                    >
+                      <div>
+                        <span style={{ fontWeight: 700, fontSize: "1.0625rem" }}>{word}</span>
+                        {card && <span className="text-xs text-muted" style={{ marginLeft: "12px" }}>{card.partOfSpeech} {card.meaning}</span>}
+                      </div>
+                      <span style={{ fontSize: "1.2rem" }}>🔊</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <button className="btn btn-primary w-full" style={{ borderRadius: "var(--r-lg)", padding: "16px" }} onClick={() => router.push(`/${userId}?done=${deckId}`)}>
+            確認並回到首頁
           </button>
         </div>
       </div>
@@ -226,7 +352,7 @@ function StudyInner() {
   const frontText = mode === "en-to-zh" ? currentCard.word : currentCard.meaning;
 
   return (
-    <div className="page">
+    <div className="page" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       {/* 頂部導航 */}
       <div className="page-header">
         <button className="btn-icon" onClick={() => { stopSpeech(); router.push(`/${userId}`); }} aria-label="返回">←</button>
@@ -236,6 +362,12 @@ function StudyInner() {
         </div>
         <button className="btn-icon" onClick={switchMode} title={mode === "en-to-zh" ? "正面：英文" : "正面：中文"}>
           {mode === "en-to-zh" ? "🇺🇸" : "🇨🇳"}
+        </button>
+        <button className="btn-icon" onClick={toggleGesture} title={gestureEnabled ? "手勢已啟用" : "手勢已停用"} style={{
+          background: gestureEnabled ? "var(--blue-light)" : "var(--surface-2)",
+          color: gestureEnabled ? "var(--blue)" : "var(--text-muted)",
+        }}>
+          🫲
         </button>
         <button className="btn-icon" onClick={() => setShowSpeech(!showSpeech)} aria-label="語音設定">
           🔊
@@ -247,12 +379,12 @@ function StudyInner() {
         <div className="progress-bar">
           <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
         </div>
-        {/* 顯示「繼續學習」提示 */}
-        {session && session.currentIndex > 0 && (
-          <div className="text-xs text-muted" style={{ textAlign: "right", marginTop: "2px" }}>
-            已學 {session.currentIndex} 張
-          </div>
-        )}
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px" }} className="text-xs text-muted">
+          <span>{gestureEnabled ? "🫳 滑動可操作" : ""}</span>
+          {session && session.currentIndex > 0 && (
+            <span>已學 {session.currentIndex} 張</span>
+          )}
+        </div>
       </div>
 
       {/* 語音設定面板 */}
@@ -272,10 +404,10 @@ function StudyInner() {
             <div key={field} style={{ marginBottom: "8px" }}>
               <div style={{ display: "flex", justifyContent: "space-between" }} className="text-sm">
                 <span className="text-muted">{label}</span>
-                <span>{(speechSettings[field as keyof SpeechSettings] as number).toFixed(1)}</span>
+                <span>{(speechSettings[field as keyof typeof speechSettings] as number).toFixed(1)}</span>
               </div>
               <input type="range" min={min} max={max} step={0.1}
-                value={speechSettings[field as keyof SpeechSettings] as number}
+                value={speechSettings[field as keyof typeof speechSettings] as number}
                 onChange={(e) => updateSpeech({ [field]: parseFloat(e.target.value) })}
                 style={{ width: "100%", accentColor: "var(--blue)" }}
               />

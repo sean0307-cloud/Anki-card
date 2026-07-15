@@ -59,7 +59,7 @@
 
 /* ── 暗色模式 ─────────────────────────────────────────── */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light) {
     --bg:           #000000;
     --bg-2:         #1C1C1E;
     --surface:      #1C1C1E;
@@ -77,6 +77,24 @@
     --good-light:   #013316;
     --easy-light:   #001A3D;
   }
+}
+:root.dark {
+  --bg:           #000000;
+  --bg-2:         #1C1C1E;
+  --surface:      #1C1C1E;
+  --surface-2:    #2C2C2E;
+  --surface-3:    #3A3A3C;
+  --border:       #38383A;
+  --text:         #F5F5F7;
+  --text-2:       #EBEBF0;
+  --text-muted:   #8E8E93;
+  --text-placeholder: #636366;
+  --blue:         #0A84FF;
+  --blue-light:   #001A3D;
+  --again-light:  #3A0800;
+  --hard-light:   #3A1E00;
+  --good-light:   #013316;
+  --easy-light:   #001A3D;
 }
 
 /* ── Reset ────────────────────────────────────────────── */

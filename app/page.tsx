@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getUserConfigs } from "@/storage/users";
 import { getStreak, getDailyStats } from "@/storage/progress";
-import { getSettings } from "@/storage/settings";
+import { getSettings, saveSettings } from "@/storage/settings";
 import { useCardStoreStatus } from "@/hooks/useCards";
 import { syncCardStore } from "@/lib/cardStore";
 import { saveLastSyncDate } from "@/storage/settings";
@@ -29,6 +29,9 @@ export default function HomePage() {
   const [streaks, setStreaks] = useState<Record<string, number>>({});
   const [syncing, setSyncing] = useState(false);
 
+  // 主題狀態 (light, dark, system)
+  const [theme, setTheme] = useState<"light" | "dark" | "system">("system");
+
   const { isLoading, isLoaded, error, lastFetchDate, cardCount } = useCardStoreStatus();
 
   useEffect(() => {
@@ -42,7 +45,32 @@ export default function HomePage() {
     });
     setTodayStudied(studied);
     setStreaks(streak);
+
+    // 載入當前設定的主題
+    const currentTheme = getSettings().theme ?? "system";
+    setTheme(currentTheme);
+    applyTheme(currentTheme);
   }, []);
+
+  const applyTheme = (t: "light" | "dark" | "system") => {
+    const root = document.documentElement;
+    if (t === "dark") {
+      root.classList.add("dark");
+      root.classList.remove("light");
+    } else if (t === "light") {
+      root.classList.add("light");
+      root.classList.remove("dark");
+    } else {
+      root.classList.remove("dark");
+      root.classList.remove("light");
+    }
+  };
+
+  const handleThemeChange = (newTheme: "light" | "dark" | "system") => {
+    setTheme(newTheme);
+    saveSettings({ theme: newTheme });
+    applyTheme(newTheme);
+  };
 
   const handleSync = async () => {
     const settings = getSettings();
@@ -88,7 +116,7 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* 同步教材按鈕 ★★★★★ */}
+        {/* 同步教材按鈕 */}
         <button
           onClick={handleSync}
           disabled={isLoading || syncing}
@@ -144,8 +172,51 @@ export default function HomePage() {
         })}
       </div>
 
-      {/* 底部 */}
-      <div style={{ textAlign: "center", padding: "20px 24px 40px", maxWidth: "480px", margin: "0 auto" }}>
+      {/* 底部 主題切換與管理入口 */}
+      <div style={{
+        textAlign: "center",
+        padding: "20px 24px 40px",
+        maxWidth: "480px",
+        margin: "0 auto",
+        width: "100%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "16px"
+      }}>
+        {/* Apple 風格極簡主題切換器 */}
+        <div style={{
+          display: "inline-flex",
+          background: "var(--surface-2)",
+          padding: "4px",
+          borderRadius: "var(--r-full)",
+          border: "1px solid var(--border)",
+        }}>
+          {([
+            ["light", "☀️ 亮色"],
+            ["dark", "🌙 暗色"],
+            ["system", "💻 系統"],
+          ] as const).map(([t, label]) => (
+            <button
+              key={t}
+              onClick={() => handleThemeChange(t)}
+              style={{
+                padding: "6px 12px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                borderRadius: "var(--r-full)",
+                background: theme === t ? "var(--surface)" : "transparent",
+                color: theme === t ? "var(--text)" : "var(--text-muted)",
+                boxShadow: theme === t ? "var(--shadow-sm)" : "none",
+                transition: "all 150ms ease",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <button
           className="btn btn-ghost text-sm"
           style={{ color: "var(--text-muted)" }}

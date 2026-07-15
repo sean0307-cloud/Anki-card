@@ -28,11 +28,31 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // 注入簡單腳本，防止 Next.js 頁面載入時的深淺色切換閃爍 (Flash)
+  const themeInitScript = `
+    (function() {
+      try {
+        var settings = localStorage.getItem('anki_settings');
+        if (settings) {
+          var theme = JSON.parse(settings).theme;
+          if (theme === 'dark') {
+            document.documentElement.classList.add('dark');
+            document.documentElement.classList.remove('light');
+          } else if (theme === 'light') {
+            document.documentElement.classList.add('light');
+            document.documentElement.classList.remove('dark');
+          }
+        }
+      } catch (e) {}
+    })();
+  `;
+
   return (
     <html lang="zh-TW">
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>{children}</body>
     </html>
