@@ -61,19 +61,29 @@ export default function AdminPage() {
     else { setPinError("PIN 碼錯誤"); setPinInput(""); }
   };
 
+  const extractSheetId = (input: string): string => {
+    // 支援從 full URL 提取 ID
+    const match = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    return match ? match[1] : input.trim();
+  };
+
   const handleSave = () => {
-    saveSettings({ sheetId });
+    const cleanId = extractSheetId(sheetId);
+    setSheetIdState(cleanId);
+    saveSettings({ sheetId: cleanId });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
   const handleSync = async () => {
-    if (!sheetId) { alert("請先儲存 Sheet ID"); return; }
-    saveSettings({ sheetId });
+    if (!sheetId) { alert("請先輸入 Sheet ID 或 URL"); return; }
+    const cleanId = extractSheetId(sheetId);
+    setSheetIdState(cleanId);
+    saveSettings({ sheetId: cleanId });
     setSyncing(true);
     setSyncMsg("同步中...");
     try {
-      await syncCardStore(sheetId);
+      await syncCardStore(cleanId);
       refreshStore();
       setSyncMsg(`✓ 同步完成，共 ${getCardStoreSnapshot().cardCount} 張`);
     } catch {

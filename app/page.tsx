@@ -78,9 +78,12 @@ export default function HomePage() {
       alert("請先在後台管理中設定 Google Sheets ID");
       return;
     }
+    // 支援從 full URL 提取 ID
+    const match = settings.sheetId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    const cleanId = match ? match[1] : settings.sheetId.trim();
     setSyncing(true);
     try {
-      await syncCardStore(settings.sheetId);
+      await syncCardStore(cleanId);
       saveLastSyncDate(new Date().toISOString());
     } finally {
       setSyncing(false);
