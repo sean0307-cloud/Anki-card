@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { getUserConfig } from "@/storage/users";
-import { getDailyStats, getStreak } from "@/storage/progress";
+import { getDailyStats, getStreak, getDeckCompletedCount } from "@/storage/progress";
 import { getSession } from "@/storage/cards";
 import { getUserDecks, getDeckCards, getCardStoreSnapshot, subscribeCardStore, initCardStore } from "@/lib/cardStore";
 import { getTodayDate } from "@/lib/scheduler";
@@ -18,6 +18,7 @@ interface DeckInfo {
   studied: number;
   hasSession: boolean;
   sessionProgress: number; // 0-100%
+  completedCount: number;
 }
 
 function DoneToast({ deckId, onClose }: { deckId: string; onClose: () => void }) {
@@ -85,6 +86,7 @@ function UserPageInner() {
       const hasSession = !!(session && session.date === today && session.currentIndex > 0 && session.currentIndex < session.queue.length);
       const pct = hasSession && session!.queue.length > 0
         ? Math.round((session!.currentIndex / session!.queue.length) * 100) : 0;
+      const completedCount = getDeckCompletedCount(userId, a.deck);
       return {
         id: a.deck,
         name: a.deck,
@@ -92,11 +94,20 @@ function UserPageInner() {
         studied: hasSession ? session!.currentIndex : 0,
         hasSession,
         sessionProgress: pct,
+        completedCount,
       };
     });
 
     if (deckInfos.length === 0) {
-      deckInfos.push({ id: "demo", name: "示範牌組（未設定 Sheet ID）", total: 4, studied: 0, hasSession: false, sessionProgress: 0 });
+      deckInfos.push({
+        id: "demo",
+        name: "示範牌組（未設定 Sheet ID）",
+        total: 4,
+        studied: 0,
+        hasSession: false,
+        sessionProgress: 0,
+        completedCount: getDeckCompletedCount(userId, "demo")
+      });
     }
 
     setDecks(deckInfos);
@@ -192,7 +203,14 @@ function UserPageInner() {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "10px" }}>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: "1rem" }}>{deck.name}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <div style={{ fontWeight: 700, fontSize: "1rem" }}>{deck.name}</div>
+                      {deck.completedCount > 0 && (
+                        <span className="badge badge-green" style={{ fontSize: "0.65rem", padding: "2px 6px" }}>
+                          ✓ 已完成 {deck.completedCount} 次
+                        </span>
+                      )}
+                    </div>
                     <div className="text-sm text-muted mt-1">
                       共 {deck.total} 張
                       {deck.hasSession ? ` · 繼續第 ${deck.studied + 1} 張` : " · 從頭開始"}

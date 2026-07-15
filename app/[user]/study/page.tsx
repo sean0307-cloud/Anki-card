@@ -6,7 +6,7 @@ import { DAILY_NEW_CARD_LIMIT } from "@/lib/constants";
 import { getDeckCards } from "@/lib/cardStore";
 import { useCards } from "@/hooks/useCards";
 import { getSession, saveSession, clearSession, updateCardProgress } from "@/storage/cards";
-import { incrementStat } from "@/storage/progress";
+import { incrementStat, incrementDeckCompletedCount } from "@/storage/progress";
 import { getSettings, saveSettings } from "@/storage/settings";
 import { processReview, buildDailyQueue, getTodayDate } from "@/lib/scheduler";
 import { speakWord, speakSentence, stopSpeech, onVoicesReady, getAvailableVoices } from "@/lib/speech";
@@ -171,6 +171,7 @@ function StudyInner() {
     if (newIndex >= fullQueue.length) {
       clearSession(userId, deckId);
       incrementStat(userId, "completed");
+      incrementDeckCompletedCount(userId, deckId);
       // 切換至回顧頁面
       setSummary({
         totalStudied: localSummaryState.totalStudied + 1,

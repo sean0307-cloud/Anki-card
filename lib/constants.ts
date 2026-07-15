@@ -58,6 +58,7 @@ export const STORAGE_KEYS = {
   CARD_CACHE: "anki_card_cache",
   CARD_CACHE_DATE: "anki_card_cache_date",
   PIN: (userId: string) => `anki_pin_${userId}`,
+  DECK_COMPLETED: (userId: string, deckId: string) => `anki_${userId}_completed_${deckId}`,
 } as const;
 
 /**

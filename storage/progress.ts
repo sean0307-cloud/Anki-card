@@ -81,3 +81,23 @@ export function getStreak(userId: string): number {
   }
   return streak;
 }
+
+/** 取得特定牌組的學習完成次數 */
+export function getDeckCompletedCount(userId: string, deckId: string): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DECK_COMPLETED(userId, deckId));
+    return raw ? parseInt(raw, 10) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** 增加特定牌組的學習完成次數 */
+export function incrementDeckCompletedCount(userId: string, deckId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const current = getDeckCompletedCount(userId, deckId);
+    localStorage.setItem(STORAGE_KEYS.DECK_COMPLETED(userId, deckId), (current + 1).toString());
+  } catch { /* ignore */ }
+}
