@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, Suspense } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 import type { Card, QuizQuestion, QuizResult } from "@/lib/types";
 import { getDeckCards, getCardStoreSnapshot, initCardStore } from "@/lib/cardStore";
-import { getSheetId } from "@/storage/settings";
+import { getSheetId, getSettings } from "@/storage/settings";
 import { saveQuizScore } from "@/storage/progress";
 import { generateQuiz, calcScore } from "@/lib/quiz";
 import { speakWord, stopSpeech } from "@/lib/speech";
@@ -52,14 +52,20 @@ function QuizInner() {
     const q = questions[currentQ];
     const correct = option === q.answer;
     setResults((prev) => [...prev, { questionIndex: currentQ, wordId: q.wordId, userAnswer: option, correct }]);
-    if (correct) speakWord(q.wordId, { voiceName: "", rate: 1, pitch: 1, volume: 1 });
+    if (correct) {
+      speakWord(q.wordId, getSettings().speech);
+    }
   }, [selected, questions, currentQ]);
 
   const handleNext = useCallback(() => {
     stopSpeech();
+    
+    // 將最後一題加入結果來計算精確分數
+    const finalResults = [...results];
+    
     if (currentQ + 1 >= questions.length) {
-      const correctCount = results.filter(r => r.correct).length + (selected === questions[currentQ]?.answer ? 1 : 0);
-      const score = calcScore(results.filter(r => r.correct).length, results.length);
+      const correctCount = finalResults.filter(r => r.correct).length;
+      const score = calcScore(correctCount, finalResults.length);
       saveQuizScore(userId, score);
       setPhase("result");
     } else {
@@ -67,7 +73,7 @@ function QuizInner() {
       setSelected(null);
       setShowChinese(false);
     }
-  }, [currentQ, questions, results, selected, userId]);
+  }, [currentQ, questions, results, userId]);
 
   if (loading || !isLoaded) {
     return (
@@ -221,7 +227,7 @@ function QuizInner() {
               </div>
               {q.type === "en-to-zh" && (
                 <button className="btn-icon mt-3" style={{ margin: "12px auto 0", fontSize: "1.25rem" }}
-                  onClick={() => speakWord(q.wordId, { voiceName: "", rate: 1, pitch: 1, volume: 1 })} aria-label="播放發音">
+                  onClick={() => speakWord(q.wordId, getSettings().speech)} aria-label="播放發音">
                   🔊
                 </button>
               )}
