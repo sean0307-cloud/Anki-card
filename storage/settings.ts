@@ -8,7 +8,7 @@ import { STORAGE_KEYS } from "@/lib/constants";
 import type { AppSettings } from "@/lib/types";
 
 const DEFAULT_SETTINGS: AppSettings = {
-  sheetId: "",
+  sheetId: process.env.NEXT_PUBLIC_DEFAULT_SHEET_ID || "",
   theme: "system",
   speech: {
     voiceName: "",
