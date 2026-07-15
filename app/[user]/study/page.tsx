@@ -266,6 +266,39 @@ function StudyInner() {
     );
   }
 
+  // ── 防呆：若牌組確實完全沒有單字卡
+  if (isLoaded && cards.length === 0) {
+    return (
+      <div className="page" style={{ alignItems: "center", justifyContent: "center", padding: "40px" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "3rem" }}>📭</div>
+          <h2 className="mt-3" style={{ fontWeight: 700 }}>牌組內無資料</h2>
+          <p className="text-muted text-sm mt-2">這個牌組中沒有單字，或是尚未同步完成。</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "24px" }}>
+            <button className="btn btn-primary" onClick={async () => {
+              const { getSettings } = require("@/storage/settings");
+              const { syncCardStore } = require("@/lib/cardStore");
+              const sid = getSettings().sheetId;
+              if (sid) {
+                alert("正在重新同步...");
+                await syncCardStore(sid);
+                window.location.reload();
+              } else {
+                alert("請先至後台管理設定 Sheet ID");
+                router.push("/admin");
+              }
+            }}>
+              ↻ 嘗試重新同步
+            </button>
+            <button className="btn btn-secondary" onClick={() => router.push(`/${userId}`)}>
+              返回首頁
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // 🏁 學習回顧完成畫面
   if (summary) {
     return (
@@ -346,6 +379,7 @@ function StudyInner() {
       <div className="page" style={{ alignItems: "center", justifyContent: "center" }}>
         <div style={{ fontSize: "2rem" }}>⏳</div>
         <div className="text-muted mt-2">準備中...</div>
+        <button className="btn btn-secondary mt-4" onClick={() => router.push(`/${userId}`)}>返回首頁</button>
       </div>
     );
   }
