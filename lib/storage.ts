@@ -11,9 +11,9 @@
  */
 
 // Re-export from modular storage
-export { getCardProgress, updateCardProgress, clearCardProgress, getSession, saveSession, clearSession } from "@/storage/cards";
+export { getCardProgress, updateCardProgress, clearCardProgress, getSession, saveSession, clearSession, syncUserProgressToCloud } from "@/storage/cards";
 export { getDailyStats, incrementStat, saveQuizScore, getAllStats, getStreak } from "@/storage/progress";
-export { getSettings, saveSettings, getSheetId, saveSheetId, getLastSyncDate, saveLastSyncDate } from "@/storage/settings";
+export { getSettings, saveSettings, getSheetId, saveSheetId, getLastSyncDate, saveLastSyncDate, getAppsScriptUrl, saveAppsScriptUrl } from "@/storage/settings";
 export { getUserConfigs, getUserConfig, saveUserConfig, saveAllUserConfigs, setPin, verifyPin } from "@/storage/users";
 
 // 型別重新匯出（向後相容）

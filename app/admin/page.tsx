@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { getUserConfigs, setPin, verifyPin } from "@/storage/users";
-import { getSheetId, saveSettings, getSettings } from "@/storage/settings";
+import { getSheetId, saveSettings, getSettings, getAppsScriptUrl } from "@/storage/settings";
 import {
   syncCardStore, getAllCards, getAllDeckNames, getUserDecks,
   getAllAssignments, updateLocalAssignment, getCardStoreSnapshot, initCardStore
@@ -28,6 +28,7 @@ export default function AdminPage() {
   const [pinError, setPinError] = useState("");
   const [users, setUsers] = useState<UserConfig[]>([]);
   const [sheetId, setSheetIdState] = useState("");
+  const [appsScriptUrl, setAppsScriptUrlState] = useState("");
   const [saved, setSaved] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("decks");
   const [syncing, setSyncing] = useState(false);
@@ -44,6 +45,7 @@ export default function AdminPage() {
     setUsers(getUserConfigs());
     const sid = getSheetId();
     setSheetIdState(sid);
+    setAppsScriptUrlState(getAppsScriptUrl());
     if (sid) initCardStore(sid).then(refreshStore);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -70,7 +72,7 @@ export default function AdminPage() {
   const handleSave = () => {
     const cleanId = extractSheetId(sheetId);
     setSheetIdState(cleanId);
-    saveSettings({ sheetId: cleanId });
+    saveSettings({ sheetId: cleanId, appsScriptUrl: appsScriptUrl.trim() });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -388,8 +390,17 @@ export default function AdminPage() {
               />
               <div className="text-xs text-muted">URL 格式：docs.google.com/spreadsheets/d/<strong>試算表ID</strong>/edit</div>
               <div className="text-xs text-muted mt-1">⚠️ 試算表需設為「知道連結的任何人皆可檢視」</div>
-              <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={handleSave}>💾 儲存 ID</button>
+              
+              <label className="text-xs text-muted" style={{ display: "block", marginBottom: "4px", marginTop: "12px" }}>Google Apps Script URL（寫入與同步指派/進度）</label>
+              <input type="text" value={appsScriptUrl}
+                placeholder="https://script.google.com/macros/s/.../exec"
+                onChange={(e) => setAppsScriptUrlState(e.target.value)}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: "var(--r-md)", border: "1px solid var(--border)", background: "var(--surface-2)", fontSize: "0.8125rem", fontFamily: "monospace", marginBottom: "8px" }}
+              />
+              <div className="text-xs text-muted">提示：部署代碼請參考專案根目錄下的 <code>google_apps_script.js</code></div>
+
+              <div style={{ display: "flex", gap: "8px", marginTop: "16px" }}>
+                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={handleSave}>💾 儲存設定</button>
                 <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSync} disabled={syncing || !sheetId}>
                   {syncing ? "⏳ 同步中..." : "↻ 立即同步"}
                 </button>

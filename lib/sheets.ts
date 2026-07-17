@@ -1,7 +1,7 @@
 // ============================================================
 // Google Sheets CSV 讀取與解析
 // ============================================================
-import { Card, Assignment, UserConfig } from "./types";
+import { Card, Assignment, UserConfig, CardProgress } from "./types";
 
 const SHEET_BASE = process.env.NEXT_PUBLIC_SHEET_BASE_URL || "";
 
@@ -106,3 +106,96 @@ export async function fetchUserConfigs(sheetId: string): Promise<UserConfig[]> {
     return [];
   }
 }
+
+// ── 讀取學習進度 ──────────────────────────────────────────
+export async function fetchProgressAll(sheetId: string): Promise<{ user: string; progress: CardProgress }[]> {
+  const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=Progress`;
+  try {
+    const res = await fetch(url, { next: { revalidate: 30 } }); // 快取時間 30 秒，以防快速更新
+    if (!res.ok) return [];
+    const text = await res.text();
+    const rows = parseCSV(text);
+    if (rows.length < 2) return [];
+    const headers = rows[0].map((h) => h.toLowerCase().replace(/"/g, ""));
+    return rows.slice(1).map((row) => {
+      const get = (key: string) => (row[headers.indexOf(key)] || "").replace(/^"|"$/g, "");
+      return {
+        user: get("user"),
+        progress: {
+          word: get("word"),
+          interval: parseInt(get("interval") || "1"),
+          easeFactor: parseFloat(get("easefactor") || "2.5"),
+          reviews: parseInt(get("reviews") || "0"),
+          nextReview: get("nextreview"),
+          lastAnswer: (get("lastanswer") || undefined) as any,
+        } as CardProgress
+      };
+    }).filter((r) => r.user && r.progress.word);
+  } catch (e) {
+    console.warn("fetchProgressAll error (Progress sheet might not exist yet):", e);
+    return [];
+  }
+}
+
+// ── 寫入 Assignments (Google Apps Script) ────────────────────────────────
+export async function saveAssignmentsToSheet(url: string, assignments: Assignment[]): Promise<boolean> {
+  if (!url) return false;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "saveAssignments",
+        assignments,
+      }),
+      mode: "no-cors",
+    });
+    return true;
+  } catch (e) {
+    console.error("saveAssignmentsToSheet error:", e);
+    return false;
+  }
+}
+
+// ── 寫入學習進度 (Google Apps Script) ────────────────────────────────────
+export async function saveProgressToSheet(url: string, user: string, progress: CardProgress[]): Promise<boolean> {
+  if (!url) return false;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "saveProgress",
+        user,
+        progress,
+      }),
+      mode: "no-cors",
+    });
+    return true;
+  } catch (e) {
+    console.error("saveProgressToSheet error:", e);
+    return false;
+  }
+}
+
+// ── 寫入用戶 PIN (Google Apps Script) ─────────────────────────────────────
+export async function savePinToSheet(url: string, userId: string, pinHash: string): Promise<boolean> {
+  if (!url) return false;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "savePin",
+        userId,
+        pinHash,
+      }),
+      mode: "no-cors",
+    });
+    return true;
+  } catch (e) {
+    console.error("savePinToSheet error:", e);
+    return false;
+  }
+}
+

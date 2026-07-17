@@ -92,6 +92,7 @@ export interface AppSettings {
   autoPlaySpeech: boolean;  // 翻面時自動播放例句
   gesture: boolean;         // 手勢翻卡（Sprint 3）
   lastSyncDate: string;     // 最後一次同步時間
+  appsScriptUrl?: string;   // Google Apps Script Web App URL for writing data
 }
 
 // ── 測驗（Sprint 5）────────────────────────────────

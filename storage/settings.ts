@@ -20,7 +20,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoPlaySpeech: true,
   gesture: false,
   lastSyncDate: "",
+  appsScriptUrl: process.env.NEXT_PUBLIC_APPS_SCRIPT_URL || "",
 };
+
+export function getAppsScriptUrl(): string {
+  return getSettings().appsScriptUrl ?? "";
+}
+
+export function saveAppsScriptUrl(url: string): void {
+  saveSettings({ appsScriptUrl: url });
+}
 
 export function getSettings(): AppSettings {
   if (typeof window === "undefined") return { ...DEFAULT_SETTINGS };

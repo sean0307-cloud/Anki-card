@@ -15,7 +15,7 @@
  *   - fetch 完成後自動存入 LocalStorage cache（6小時有效）
  */
 
-import { fetchVocabulary, fetchAssignments } from "./sheets";
+import { fetchVocabulary, fetchAssignments, fetchProgressAll, saveAssignmentsToSheet } from "./sheets";
 import { CACHE_HOURS, STORAGE_KEYS } from "./constants";
 import type { Card, Assignment } from "./types";
 
@@ -136,12 +136,50 @@ export async function syncCardStore(sheetId: string): Promise<void> {
 
 async function fetchAndUpdate(sheetId: string): Promise<void> {
   try {
-    const [cards, assignments] = await Promise.all([
+    const [cards, assignments, progressList] = await Promise.all([
       fetchVocabulary(sheetId),
       fetchAssignments(sheetId),
+      fetchProgressAll(sheetId),
     ]);
     populateStore(cards, assignments);
     saveToCache(cards, assignments);
+    
+    // 將雲端 Progress 工作表資料同步/合併回各用戶的 LocalStorage 學習進度中
+    if (progressList && progressList.length > 0 && typeof window !== "undefined") {
+      const userProgressMap: Record<string, Record<string, any>> = {};
+      progressList.forEach((item) => {
+        if (!userProgressMap[item.user]) {
+          userProgressMap[item.user] = {};
+        }
+        userProgressMap[item.user][item.progress.word] = item.progress;
+      });
+      
+      Object.keys(userProgressMap).forEach((userId) => {
+        let localProgress: Record<string, any> = {};
+        try {
+          const raw = localStorage.getItem(`anki_${userId}_card_progress`);
+          if (raw) {
+            localProgress = JSON.parse(raw);
+          }
+        } catch { /* ignore */ }
+        
+        const cloudProgress = userProgressMap[userId];
+        const mergedProgress = { ...localProgress };
+        
+        Object.keys(cloudProgress).forEach((word) => {
+          const cloudRec = cloudProgress[word];
+          const localRec = localProgress[word];
+          
+          // 雲端進度優先更新，若本地有更後期的複習記錄，保留本地
+          if (!localRec || cloudRec.reviews >= localRec.reviews) {
+            mergedProgress[word] = cloudRec;
+          }
+        });
+        
+        localStorage.setItem(`anki_${userId}_card_progress`, JSON.stringify(mergedProgress));
+      });
+    }
+    
     state.lastFetchDate = new Date().toISOString();
   } catch (err) {
     state.error = err instanceof Error ? err.message : "fetch 失敗";
@@ -196,7 +234,7 @@ export function getDeckAssignments(deckName: string): Assignment[] {
   return state.assignments.filter((a) => a.deck === deckName);
 }
 
-/** 更新單一 assignment（本地修改，不寫回 Sheet） */
+/** 更新單一 assignment（本地修改，並同步寫回 Sheet，若已配置 Apps Script URL） */
 export function updateLocalAssignment(updated: Assignment): void {
   const idx = state.assignments.findIndex(
     (a) => a.user === updated.user && a.deck === updated.deck
@@ -216,11 +254,18 @@ export function updateLocalAssignment(updated: Assignment): void {
         localStorage.setItem("anki_card_cache", JSON.stringify(cached));
       }
     } catch { /* ignore */ }
+    
+    // 同步到 Google Sheet Web App
+    const { getAppsScriptUrl } = require("@/storage/settings");
+    const url = getAppsScriptUrl();
+    if (url) {
+      saveAssignmentsToSheet(url, state.assignments);
+    }
   }
   notify();
 }
 
-/** 批次更新 assignments */
+/** 批次更新 assignments（並同步寫回 Sheet） */
 export function updateAllLocalAssignments(assignments: Assignment[]): void {
   state.assignments = assignments;
   if (typeof window !== "undefined") {
@@ -232,6 +277,13 @@ export function updateAllLocalAssignments(assignments: Assignment[]): void {
         localStorage.setItem("anki_card_cache", JSON.stringify(cached));
       }
     } catch { /* ignore */ }
+    
+    // 同步到 Google Sheet Web App
+    const { getAppsScriptUrl } = require("@/storage/settings");
+    const url = getAppsScriptUrl();
+    if (url) {
+      saveAssignmentsToSheet(url, state.assignments);
+    }
   }
   notify();
 }
