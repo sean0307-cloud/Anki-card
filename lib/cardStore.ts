@@ -126,58 +126,66 @@ export async function initCardStore(sheetId: string): Promise<void> {
 
 /**
  * 強制同步（「同步教材」按鈕觸發）
- * 無論快取是否有效，都重新 fetch
+ * ★ 重點：僅同步字卡，不變動本地已設定好的委派/指派
  */
 export async function syncCardStore(sheetId: string): Promise<void> {
   state.isLoading = true;
   notify();
-  await fetchAndUpdate(sheetId);
+  await fetchAndUpdate(sheetId, true); // 僅同步字卡
 }
 
-async function fetchAndUpdate(sheetId: string): Promise<void> {
+async function fetchAndUpdate(sheetId: string, onlyCards: boolean = false): Promise<void> {
   try {
-    const [cards, assignments, progressList] = await Promise.all([
-      fetchVocabulary(sheetId),
-      fetchAssignments(sheetId),
-      fetchProgressAll(sheetId),
-    ]);
-    populateStore(cards, assignments);
-    saveToCache(cards, assignments);
-    
-    // 將雲端 Progress 工作表資料同步/合併回各用戶的 LocalStorage 學習進度中
-    if (progressList && progressList.length > 0 && typeof window !== "undefined") {
-      const userProgressMap: Record<string, Record<string, any>> = {};
-      progressList.forEach((item) => {
-        if (!userProgressMap[item.user]) {
-          userProgressMap[item.user] = {};
-        }
-        userProgressMap[item.user][item.progress.word] = item.progress;
-      });
+    if (onlyCards) {
+      // 僅下載單字庫，保留目前的指派設定
+      const cards = await fetchVocabulary(sheetId);
+      populateStore(cards, state.assignments);
+      saveToCache(cards, state.assignments);
+    } else {
+      // 完整下載（通常僅在首次載入無快取時）
+      const [cards, assignments, progressList] = await Promise.all([
+        fetchVocabulary(sheetId),
+        fetchAssignments(sheetId),
+        fetchProgressAll(sheetId),
+      ]);
+      populateStore(cards, assignments);
+      saveToCache(cards, assignments);
       
-      Object.keys(userProgressMap).forEach((userId) => {
-        let localProgress: Record<string, any> = {};
-        try {
-          const raw = localStorage.getItem(`anki_${userId}_card_progress`);
-          if (raw) {
-            localProgress = JSON.parse(raw);
+      // 將雲端 Progress 工作表資料同步/合併回各用戶的 LocalStorage 學習進度中
+      if (progressList && progressList.length > 0 && typeof window !== "undefined") {
+        const userProgressMap: Record<string, Record<string, any>> = {};
+        progressList.forEach((item) => {
+          if (!userProgressMap[item.user]) {
+            userProgressMap[item.user] = {};
           }
-        } catch { /* ignore */ }
-        
-        const cloudProgress = userProgressMap[userId];
-        const mergedProgress = { ...localProgress };
-        
-        Object.keys(cloudProgress).forEach((word) => {
-          const cloudRec = cloudProgress[word];
-          const localRec = localProgress[word];
-          
-          // 雲端進度優先更新，若本地有更後期的複習記錄，保留本地
-          if (!localRec || cloudRec.reviews >= localRec.reviews) {
-            mergedProgress[word] = cloudRec;
-          }
+          userProgressMap[item.user][item.progress.word] = item.progress;
         });
         
-        localStorage.setItem(`anki_${userId}_card_progress`, JSON.stringify(mergedProgress));
-      });
+        Object.keys(userProgressMap).forEach((userId) => {
+          let localProgress: Record<string, any> = {};
+          try {
+            const raw = localStorage.getItem(`anki_${userId}_card_progress`);
+            if (raw) {
+              localProgress = JSON.parse(raw);
+            }
+          } catch { /* ignore */ }
+          
+          const cloudProgress = userProgressMap[userId];
+          const mergedProgress = { ...localProgress };
+          
+          Object.keys(cloudProgress).forEach((word) => {
+            const cloudRec = cloudProgress[word];
+            const localRec = localProgress[word];
+            
+            // 雲端進度優先更新，若本地有更後期的複習記錄，保留本地
+            if (!localRec || cloudRec.reviews >= localRec.reviews) {
+              mergedProgress[word] = cloudRec;
+            }
+          });
+          
+          localStorage.setItem(`anki_${userId}_card_progress`, JSON.stringify(mergedProgress));
+        });
+      }
     }
     
     state.lastFetchDate = new Date().toISOString();
